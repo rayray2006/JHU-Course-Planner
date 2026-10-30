@@ -16,7 +16,7 @@ const vertex = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
   : createVertex();
 
 const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-import { searchCourses, getCourseStats, searchCatalogue, getCourseHistory, getPrerequisiteChain } from "../tools/search-courses";
+import { searchCourses, getCourseStats, searchCatalogue, getCourseHistory, getPrerequisiteChain, listPosTags } from "../tools/search-courses";
 import {
   addCourseToSchedule,
   removeCourseFromSchedule,
@@ -35,6 +35,7 @@ export function createCourseAgent(activeTerm: string, hasSisData: boolean, selec
   const tools = {
     searchCourses,
     getCourseStats,
+    listPosTags,
     searchCatalogue,
     getCourseHistory,
     getPrerequisiteChain,

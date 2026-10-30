@@ -77,7 +77,7 @@ export const searchCourses = tool({
     areas: z.string().optional().describe("Area codes comma-separated: E(Engineering),H(Humanities),N(NatSci),Q(Quant),S(Social). e.g. 'H,S'"),
     foundationalAbility: z.string().optional().describe("JHU Foundational Ability (FA). Accepts name or number: FA1=Citizens and Society, FA2=Creative Expression, FA3=Culture and Aesthetics, FA4=Engagement with Society, FA5=Ethical Reflection, FA6=Ethics and Foundations, FA7=Projects and Methods, FA8=Science and Data, FA9=Writing and Communication"),
     building: z.string().optional(),
-    posTag: z.string().optional().describe("POS (Program of Study) tag, e.g. 'CSCI-THRY', 'CSCI-APPL', 'CSCI-SOFT', 'BMED-NE', 'HIST-US'. Use prefix for broad match, e.g. 'CSCI' for all CS tags."),
+    posTag: z.string().optional().describe("POS (Program of Study) tag, e.g. 'CSCI-THRY', 'BMED-BDS', 'HIST-US'. Use a prefix for a broad match, e.g. 'CSCI' for all CS tags. These are examples, not the full set — call listPosTags to see which tags exist this term."),
     hasOpenSeats: z.boolean().optional(),
     hasPrerequisites: z.boolean().optional(),
     prerequisiteKeyword: z.string().optional().describe("Find courses requiring this prereq (code or name)"),
@@ -691,5 +691,96 @@ export const getPrerequisiteChain = tool({
       chain,
       totalPrerequisites: chain.length - 1,
     };
+  },
+});
+
+/**
+ * The agent had no way to find out which POS tags exist, so asked "what are
+ * the POS tags?" it could only recite the handful named in the posTag
+ * description — which reads as an authoritative list and is not one. Tags are
+ * per-term data, so they have to be read from the term being browsed.
+ */
+const POS_TAG_CACHE_MS = 300_000;
+const posTagCache = new Map<string, { at: number; groups: PosTagGroup[] }>();
+
+type PosTagGroup = { prefix: string; tags: { tag: string; courses: number }[] };
+
+async function loadPosTagGroups(term: string): Promise<PosTagGroup[]> {
+  const hit = posTagCache.get(term);
+  if (hit && Date.now() - hit.at < POS_TAG_CACHE_MS) return hit.groups;
+
+  // Count distinct courses, not section rows: six sections of one course is
+  // one course that carries the tag.
+  const byTag = new Map<string, Set<string>>();
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase
+      .from("courses")
+      .select("offering_name, pos_tags")
+      .eq("term", term)
+      .neq("pos_tags", "")
+      .range(offset, offset + pageSize - 1);
+    if (error || !data || data.length === 0) break;
+    for (const row of data as { offering_name: string; pos_tags: string }[]) {
+      for (const raw of (row.pos_tags || "").split(",")) {
+        const tag = raw.trim();
+        if (!tag) continue;
+        if (!byTag.has(tag)) byTag.set(tag, new Set());
+        byTag.get(tag)!.add(row.offering_name);
+      }
+    }
+    if (data.length < pageSize) break;
+  }
+
+  const byPrefix = new Map<string, { tag: string; courses: number }[]>();
+  for (const [tag, codes] of byTag) {
+    const prefix = tag.split("-")[0];
+    if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+    byPrefix.get(prefix)!.push({ tag, courses: codes.size });
+  }
+
+  const groups = [...byPrefix.entries()]
+    .map(([prefix, tags]) => ({ prefix, tags: tags.sort((a, b) => b.courses - a.courses) }))
+    .sort((a, b) => b.tags.length - a.tags.length || a.prefix.localeCompare(b.prefix));
+
+  posTagCache.set(term, { at: Date.now(), groups });
+  return groups;
+}
+
+export const listPosTags = tool({
+  description:
+    "List the Program of Study (POS) tags that actually exist for the active term, with how many courses carry each. Use this whenever asked which tags, POS codes or program areas are available, and to confirm a tag exists before filtering searchCourses by posTag. Never guess a tag — read it from here.",
+  inputSchema: z.object({
+    prefix: z
+      .string()
+      .optional()
+      .describe("Only tags starting with this, e.g. 'BMED', 'CSCI', 'ROBO'. Omit to list every tag grouped by prefix."),
+  }),
+  execute: async ({ prefix }) => {
+    const activeTerm = getActiveTerm();
+    const all = await loadPosTagGroups(activeTerm);
+
+    const groups = prefix
+      ? all
+          .map((g) => ({
+            prefix: g.prefix,
+            tags: g.tags.filter((t) => t.tag.toUpperCase().startsWith(prefix.toUpperCase())),
+          }))
+          .filter((g) => g.tags.length > 0)
+      : all;
+
+    const totalTags = groups.reduce((n, g) => n + g.tags.length, 0);
+
+    if (totalTags === 0) {
+      return {
+        term: activeTerm,
+        totalTags: 0,
+        note: prefix
+          ? `No POS tag starts with "${prefix}" in ${activeTerm}. Call listPosTags without a prefix to see which prefixes exist.`
+          : `No POS tags are recorded for ${activeTerm}.`,
+      };
+    }
+
+    return { term: activeTerm, totalTags, totalPrefixes: groups.length, groups };
   },
 });
