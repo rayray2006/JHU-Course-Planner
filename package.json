@@ -18,7 +18,8 @@
     "migrate:schema": "npx tsx --env-file=.env.local scripts/migrate-schema.ts",
     "verify:model": "npx tsx --env-file=.env.local scripts/verify-chat-model.ts",
     "fix:areas": "npx tsx --env-file=.env.local scripts/fix-areas.ts",
-    "sync:postags": "npx tsx --env-file=.env.local scripts/sync-postags.ts"
+    "sync:postags": "npx tsx --env-file=.env.local scripts/sync-postags.ts",
+    "sync:departments": "npx tsx --env-file=.env.local scripts/update-all-departments.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.136",
