@@ -315,12 +315,22 @@ export default function Home() {
   const filteredTerms = useMemo(() => {
     const start = parseEnrollCode(enrollStart);
     const end = parseEnrollCode(enrollEnd);
-    if (!start || !end) return availableTerms;
-    const startIdx = availableTerms.findIndex((t) => t.term === start.term);
-    const endIdx = availableTerms.findIndex((t) => t.term === end.term);
-    if (startIdx === -1 || endIdx === -1) return availableTerms;
-    return availableTerms.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
-  }, [availableTerms, enrollStart, enrollEnd, parseEnrollCode]);
+    let termWindow = availableTerms;
+    if (start && end) {
+      const startIdx = availableTerms.findIndex((t) => t.term === start.term);
+      const endIdx = availableTerms.findIndex((t) => t.term === end.term);
+      if (startIdx !== -1 && endIdx !== -1) {
+        termWindow = availableTerms.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
+      }
+    }
+    // The enrolment window is persisted in localStorage, so anyone who set it
+    // before the app moved on to a newer term would find that term missing
+    // from the picker — including the one they are currently looking at.
+    const pinned = availableTerms.filter((t) => t.term === activeTerm || t.is_current);
+    const merged = [...termWindow];
+    for (const t of pinned) if (!merged.some((m) => m.term === t.term)) merged.push(t);
+    return merged.sort((a, b) => a.sort_order - b.sort_order);
+  }, [availableTerms, enrollStart, enrollEnd, parseEnrollCode, activeTerm]);
 
   // Fetch available terms on mount
   useEffect(() => {
@@ -563,6 +573,19 @@ export default function Home() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [termOpen]);
+
+  // Search results and the open detail panel belong to the term they came
+  // from, so drop them. The schedule refetches on its own: fetchSchedule is
+  // keyed to activeTerm.
+  const selectTerm = useCallback((term: string) => {
+    setActiveTermState(term);
+    setTermOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchOpen(false);
+    setExpandedSearchCourse(null);
+    setSelected(null);
+  }, []);
 
   // Build valid course codes + ordered section list from tool outputs
   const { validCourses, courseSections } = useMemo(() => {
@@ -826,7 +849,38 @@ export default function Home() {
           {/* Title + Enrollment + Term */}
           <div className="flex items-center gap-2 shrink-0">
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight">JHU Planner</h1>
-            <span className="text-[11px] font-medium text-slate-500">{activeTerm}</span>
+            <div className="relative" ref={termRef}>
+              <button
+                type="button"
+                onClick={() => setTermOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={termOpen}
+                aria-label={`Term: ${activeTerm}. Change term`}
+                className="flex items-center gap-1 px-1.5 py-0.5 -mx-1 rounded text-[11px] font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+              >
+                {activeTerm}
+                <svg className={`w-3 h-3 transition-transform ${termOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+              </button>
+              {termOpen && (
+                <div role="listbox" className="absolute left-0 top-full mt-1 w-48 max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg py-1 z-[200]">
+                  {filteredTerms.map((t) => (
+                    <button
+                      key={t.term}
+                      type="button"
+                      role="option"
+                      aria-selected={t.term === activeTerm}
+                      onClick={() => selectTerm(t.term)}
+                      className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-slate-50 transition-colors ${t.term === activeTerm ? "font-semibold text-blue-600" : "text-slate-600"}`}
+                    >
+                      <span className="truncate">{t.term}</span>
+                      <span className="shrink-0 text-[10px] text-slate-400">
+                        {t.has_sis_data ? t.course_count.toLocaleString() : "plan"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Search bar */}

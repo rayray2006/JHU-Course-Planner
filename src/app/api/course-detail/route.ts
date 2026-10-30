@@ -24,9 +24,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data || null);
   }
 
-  // Both are always needed and neither depends on the other, so they go out
+  // All three are always needed and none depends on the others, so they go out
   // together — the queries are fast, it's the round trip that costs ~350ms.
-  const [posTags, { data }] = await Promise.all([
+  //
+  // The catalogue is fetched even when the course row exists because SIS rows
+  // carry seats and meeting times but almost never the prose: only 10 of the
+  // 4,447 Spring 2027 rows have a description and none has prerequisites,
+  // while the catalogue has descriptions for 9,513 courses. Consulting it only
+  // when the course row was missing entirely meant "No description available"
+  // on every course in a term that had SIS data.
+  const [posTags, { data }, { data: catData }] = await Promise.all([
     getCoursePosTags(code),
     supabase
       .from("courses")
@@ -35,18 +42,28 @@ export async function GET(req: NextRequest) {
       .eq("term", term)
       .limit(1)
       .single(),
+    supabase
+      .from("catalogue")
+      .select("description, prerequisites, corequisites, restrictions")
+      .eq("offering_name", code)
+      .limit(1)
+      .maybeSingle(),
   ]);
 
-  if (data) return NextResponse.json({ ...data, pos_tags: posTags });
+  if (data) {
+    // Per field, not per row: a course row may carry prerequisites but no
+    // description, and the catalogue should fill only what is actually blank.
+    return NextResponse.json({
+      ...data,
+      description: data.description || catData?.description || "",
+      prerequisites: data.prerequisites || catData?.prerequisites || "",
+      corequisites: data.corequisites || catData?.corequisites || "",
+      restrictions: data.restrictions || catData?.restrictions || "",
+      pos_tags: posTags,
+    });
+  }
 
-  // Fallback to catalogue for future terms
-  const { data: catData } = await supabase
-    .from("catalogue")
-    .select("description, prerequisites, corequisites, restrictions")
-    .eq("offering_name", code)
-    .limit(1)
-    .single();
-
+  // No SIS section for this term — fall back to the catalogue alone.
   if (catData) {
     return NextResponse.json({
       ...catData,
