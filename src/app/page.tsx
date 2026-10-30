@@ -905,7 +905,14 @@ export default function Home() {
                   grouped.get(r.offering_name)!.push(r);
                 }
                 return (
-                <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-1 max-h-[400px] overflow-auto">
+                <div
+                  // The dropdown hangs directly over the MON-WED columns of the
+                  // grid, so a hovered morning section previews underneath it and
+                  // looks like nothing happened. Fade it while a preview is up —
+                  // the cursor is already on the row, and the point of the hover
+                  // is to see the fit, not to read the list.
+                  className={`absolute top-full left-0 right-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-1 max-h-[400px] overflow-auto transition-opacity duration-150 ${previewCourse ? "opacity-25" : "opacity-100"}`}
+                >
                   {[...grouped.entries()].map(([code, sections]) => {
                     const first = sections[0];
                     const isCatalogue = !!(first as { source?: string }).source;
