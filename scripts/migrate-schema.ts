@@ -21,7 +21,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const MIGRATION_SQL = `
 -- 1. Add term column to schedules
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS term TEXT NOT NULL DEFAULT 'Fall 2026';
+ALTER TABLE schedules ADD COLUMN IF NOT EXISTS term TEXT NOT NULL DEFAULT 'Spring 2027';
 
 -- 2. Drop old unique constraint and add new one with term
 DO $$ BEGIN
@@ -86,8 +86,8 @@ INSERT INTO available_terms VALUES ('Summer 2025', 3, FALSE, 0, FALSE) ON CONFLI
 INSERT INTO available_terms VALUES ('Fall 2025', 4, FALSE, 0, FALSE) ON CONFLICT (term) DO NOTHING;
 INSERT INTO available_terms VALUES ('Spring 2026', 5, FALSE, 0, FALSE) ON CONFLICT (term) DO NOTHING;
 INSERT INTO available_terms VALUES ('Summer 2026', 6, FALSE, 0, FALSE) ON CONFLICT (term) DO NOTHING;
-INSERT INTO available_terms VALUES ('Fall 2026', 7, TRUE, 5442, TRUE) ON CONFLICT (term) DO NOTHING;
-INSERT INTO available_terms VALUES ('Spring 2027', 8, FALSE, 0, FALSE) ON CONFLICT (term) DO NOTHING;
+INSERT INTO available_terms VALUES ('Fall 2026', 7, TRUE, 5810, FALSE) ON CONFLICT (term) DO NOTHING;
+INSERT INTO available_terms VALUES ('Spring 2027', 8, TRUE, 4447, TRUE) ON CONFLICT (term) DO NOTHING;
 `;
 
 async function verify() {

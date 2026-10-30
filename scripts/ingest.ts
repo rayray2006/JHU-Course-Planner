@@ -1,7 +1,8 @@
 import { initDb } from "../src/lib/db";
+import { fetchSchoolTerm, toCourseRow, SISApiError, SIS_API_BASE, type SISCourse } from "../src/lib/sis-api";
+import { CURRENT_TERM } from "../src/lib/terms";
 
 const API_KEY = process.env.JHU_API_KEY;
-const BASE_URL = "https://sis.jhu.edu/api/classes";
 
 const ALL_TERMS = [
   "Fall 2024",
@@ -20,44 +21,15 @@ const SCHOOLS = [
   "Whiting School of Engineering",
 ];
 
-interface Course {
-  OfferingName: string;
-  SectionName: string;
-  Title: string;
-  Credits: string;
-  Department: string;
-  SchoolName: string;
-  Level: string;
-  Status: string;
-  DOW: string;
-  TimeOfDay: string;
-  Meetings: string;
-  Location: string;
-  Building: string;
-  InstructionMethod: string;
-  Instructors: string;
-  InstructorsFullName: string;
-  MaxSeats: string;
-  OpenSeats: string;
-  Waitlisted: string;
-  IsWritingIntensive: string;
-  Areas: string;
-  Repeatable: string;
-  Term: string;
-  TermStartDate: string;
-}
-
-async function fetchSchoolCourses(school: string, term: string): Promise<Course[]> {
-  const url = `${BASE_URL}/${encodeURIComponent(school)}/${encodeURIComponent(term)}?key=${API_KEY}`;
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.error(`  Failed for ${school}: ${res.status}`);
+async function fetchSchoolCourses(school: string, term: string): Promise<SISCourse[]> {
+  try {
+    return await fetchSchoolTerm(school, term, API_KEY!);
+  } catch (err) {
+    const msg = err instanceof SISApiError ? err.message : String(err);
+    console.error(`  Failed for ${school}: ${msg}`);
+    if (err instanceof SISApiError && err.status === 401) process.exit(1);
     return [];
   }
-
-  const data = await res.json();
-  return data;
 }
 
 async function main() {
@@ -72,6 +44,7 @@ async function main() {
   const argTerm = process.argv[2];
   const terms = argTerm ? [argTerm] : ALL_TERMS;
 
+  console.log(`SIS API: ${SIS_API_BASE}`);
   console.log(`Ingesting ${terms.length} term(s): ${terms.join(", ")}\n`);
 
   const insert = db.prepare(`
@@ -90,35 +63,8 @@ async function main() {
     )
   `);
 
-  const insertMany = db.transaction((courses: Course[]) => {
-    for (const c of courses) {
-      insert.run({
-        offering_name: c.OfferingName,
-        section_name: c.SectionName,
-        title: c.Title,
-        credits: c.Credits,
-        department: c.Department,
-        school_name: c.SchoolName,
-        level: c.Level,
-        status: c.Status,
-        dow: c.DOW,
-        time_of_day: c.TimeOfDay,
-        meetings: c.Meetings,
-        location: c.Location,
-        building: c.Building,
-        instruction_method: c.InstructionMethod,
-        instructors: c.Instructors,
-        instructors_full_name: c.InstructorsFullName,
-        max_seats: c.MaxSeats,
-        open_seats: c.OpenSeats,
-        waitlisted: c.Waitlisted,
-        is_writing_intensive: c.IsWritingIntensive,
-        areas: c.Areas,
-        repeatable: c.Repeatable,
-        term: c.Term,
-        term_start_date: c.TermStartDate,
-      });
-    }
+  const insertMany = db.transaction((courses: SISCourse[]) => {
+    for (const c of courses) insert.run(toCourseRow(c));
   });
 
   const updateTerm = db.prepare(`
@@ -152,8 +98,13 @@ async function main() {
       sort_order: sortOrder,
       has_sis_data: termTotal > 0 ? 1 : 0,
       course_count: termTotal,
-      is_current: term === "Fall 2026" ? 1 : 0,
+      is_current: term === CURRENT_TERM ? 1 : 0,
     });
+    if (term === CURRENT_TERM) {
+      // Exactly one row may be flagged — the seat-sync cron picks the current
+      // term with `.limit(1)` and would otherwise get whichever row came first.
+      db.prepare("UPDATE available_terms SET is_current = 0 WHERE term != ?").run(CURRENT_TERM);
+    }
 
     grandTotal += termTotal;
     console.log(`  Total for ${term}: ${termTotal} sections`);

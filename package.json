@@ -12,9 +12,15 @@
     "ingest:evaluations": "npx tsx scripts/ingest-evaluations.ts",
     "ingest:rmp": "npx tsx scripts/ingest-rmp.ts",
     "ingest:catalogue": "npx tsx scripts/ingest-catalogue.ts",
-    "migrate:schema": "npx tsx --env-file=.env.local scripts/migrate-schema.ts"
+    "sync:seats": "npx tsx --env-file=.env.local scripts/sync-seats-local.ts",
+    "sync:supabase": "npx tsx --env-file=.env.local scripts/sync-all-to-supabase.ts",
+    "aggregate:evals": "npx tsx --env-file=.env.local scripts/aggregate-evals-supabase.ts",
+    "migrate:schema": "npx tsx --env-file=.env.local scripts/migrate-schema.ts",
+    "verify:model": "npx tsx --env-file=.env.local scripts/verify-chat-model.ts",
+    "fix:areas": "npx tsx --env-file=.env.local scripts/fix-areas.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.136",
     "@ai-sdk/google": "^3.0.61",
     "@ai-sdk/google-vertex": "^4.0.109",
     "@ai-sdk/openai": "^3.0.52",

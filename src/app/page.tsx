@@ -7,6 +7,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from "rea
 import type { CourseAgentUIMessage } from "@/lib/agents/course-agent";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { MobileLayout } from "@/components/MobileLayout";
+import { CURRENT_TERM } from "@/lib/terms";
 
 
 interface ScheduledCourse {
@@ -279,7 +280,7 @@ interface TermInfo {
 
 export default function Home() {
   const isMobile = useIsMobile();
-  const [activeTerm, setActiveTermState] = useState("Fall 2026");
+  const [activeTerm, setActiveTermState] = useState(CURRENT_TERM);
   const [availableTerms, setAvailableTerms] = useState<TermInfo[]>([]);
   const termsLoaded = availableTerms.length > 0;
   const hasSisData = availableTerms.find((t) => t.term === activeTerm)?.has_sis_data ?? true;

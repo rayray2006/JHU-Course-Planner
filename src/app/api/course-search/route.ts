@@ -1,10 +1,11 @@
 import { supabase } from "@/lib/supabase";
 import { getPosTags, getCataloguePosTags } from "@/lib/data";
 import { NextRequest, NextResponse } from "next/server";
+import { CURRENT_TERM } from "@/lib/terms";
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q") || "";
-  const term = req.nextUrl.searchParams.get("term") || "Fall 2026";
+  const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
   const mode = req.nextUrl.searchParams.get("mode") || "term"; // "term" | "past" | "catalogue"
 
   if (q.length < 2) return NextResponse.json([]);

@@ -103,7 +103,7 @@ export function initDb() {
       session_id TEXT NOT NULL,
       offering_name TEXT NOT NULL,
       section_name TEXT NOT NULL,
-      term TEXT NOT NULL DEFAULT 'Fall 2026',
+      term TEXT NOT NULL DEFAULT 'Spring 2027',
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(session_id, offering_name, section_name, term)
     );

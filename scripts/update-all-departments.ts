@@ -1,8 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import { fetchSchoolTerm, formatAllDepartments } from "../src/lib/sis-api";
+import { CURRENT_TERM } from "../src/lib/terms";
 
 const API_KEY = process.env.JHU_API_KEY!;
-const BASE_URL = "https://sis.jhu.edu/api/classes";
-const TERM = "Fall 2026";
+const TERM = process.argv[2] || CURRENT_TERM;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,12 +16,6 @@ const SCHOOLS = [
   "Whiting School of Engineering",
 ];
 
-interface APICourse {
-  OfferingName: string;
-  SectionName: string;
-  AllDepartments: string;
-}
-
 async function main() {
   // First, add column if it doesn't exist (will fail silently if already there)
   console.log("Ensuring all_departments column exists...");
@@ -28,11 +23,14 @@ async function main() {
   // Fetch from API and update Supabase
   let updated = 0;
   for (const school of SCHOOLS) {
-    const url = `${BASE_URL}/${encodeURIComponent(school)}/${encodeURIComponent(TERM)}?key=${API_KEY}`;
     console.log(`Fetching ${school}...`);
-    const res = await fetch(url);
-    if (!res.ok) { console.error(`  Failed: ${res.status}`); continue; }
-    const data: APICourse[] = await res.json();
+    let data;
+    try {
+      data = await fetchSchoolTerm(school, TERM, API_KEY);
+    } catch (err) {
+      console.error(`  Failed: ${err instanceof Error ? err.message : err}`);
+      continue;
+    }
     console.log(`  Got ${data.length} sections`);
 
     // Batch update in chunks
@@ -40,10 +38,7 @@ async function main() {
       const chunk = data.slice(i, i + 100);
       for (const c of chunk) {
         // Convert ^ separator to comma for readable storage
-        const allDepts = (c.AllDepartments || "").replace(/\^/g, ", ");
-        if (allDepts && allDepts !== c.AllDepartments) {
-          // Only update if there are multiple departments
-        }
+        const allDepts = formatAllDepartments(c.AllDepartments);
         const { error } = await supabase
           .from("courses")
           .update({ all_departments: allDepts })

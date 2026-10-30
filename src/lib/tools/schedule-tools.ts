@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
+import { CURRENT_TERM } from "../terms";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
@@ -8,7 +9,7 @@ export function setSessionId(id: string) { _sessionId = id; }
 export function getSessionId() { return _sessionId; }
 
 // Active term for this request
-let _activeTerm = "Fall 2026";
+let _activeTerm = CURRENT_TERM;
 export function setActiveTerm(term: string) { _activeTerm = term; }
 export function getActiveTerm() { return _activeTerm; }
 

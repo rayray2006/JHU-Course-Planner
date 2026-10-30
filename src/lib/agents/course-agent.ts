@@ -1,5 +1,8 @@
 import { ToolLoopAgent, InferAgentUIMessage, stepCountIs } from "ai";
 import { createVertex } from "@ai-sdk/google-vertex";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { CURRENT_TERM } from "../terms";
+import { CHAT_MODEL, USE_CLAUDE } from "../model-config";
 
 // Use service account JSON from env var on Vercel, ADC locally
 const vertex = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
@@ -11,6 +14,8 @@ const vertex = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
       },
     })
   : createVertex();
+
+const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 import { searchCourses, getCourseStats, searchCatalogue, getCourseHistory, getPrerequisiteChain } from "../tools/search-courses";
 import {
   addCourseToSchedule,
@@ -42,12 +47,21 @@ export function createCourseAgent(activeTerm: string, hasSisData: boolean, selec
     findNonConflictingCourses,
   };
 
-  const model = vertex("gemini-2.5-flash");
+  const model = USE_CLAUDE ? anthropic(CHAT_MODEL) : vertex(CHAT_MODEL);
 
   return new ToolLoopAgent({
     model,
+    // Only the namespace matching the active provider is read; the other is
+    // ignored, so both can sit here and the model stays a one-line switch.
     providerOptions: {
-      vertex: { thinkingConfig: { thinkingBudget: 1024 } },
+      // Haiku 5.5 defaults to medium effort. Formatting tool output into a
+      // bulleted list does not need more than low, and effort is the only
+      // depth control on this model — budgetTokens returns a 400.
+      anthropic: { effort: "low" },
+      // 0 disables thinking on Gemini 2.5. A 1024-token budget was being spent
+      // before any visible text, and billed at output rates, to format a
+      // search result into a list. The tools do the reasoning here.
+      vertex: { thinkingConfig: { thinkingBudget: 0 } },
     },
     stopWhen: stepCountIs(5),
     instructions: `Concise JHU course advisor. Term: ${activeTerm}.${catalogueNote}
@@ -164,5 +178,5 @@ Always be conversational and helpful. If the user's query is ambiguous, ask clar
 }
 
 // Default agent for type inference
-const _defaultAgent = createCourseAgent("Fall 2026", true);
+const _defaultAgent = createCourseAgent(CURRENT_TERM, true);
 export type CourseAgentUIMessage = InferAgentUIMessage<typeof _defaultAgent>;

@@ -32,12 +32,14 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
 
 # database
 courses.db
+courses.db.bak-*
 courses.db-wal
 courses.db-shm
 

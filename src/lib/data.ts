@@ -164,6 +164,42 @@ export async function getVisiblePrograms(): Promise<{ program_name: string; scho
   return data || [];
 }
 
+/**
+ * Whether a term has SIS section data, or only catalogue entries.
+ *
+ * Cached briefly: the chat route needs this before it can call the model, and
+ * `available_terms` only changes when an ingest runs.
+ */
+const SIS_DATA_CACHE_MS = 300_000;
+const sisDataCache = new Map<string, { value: boolean; at: number }>();
+
+export async function termHasSisData(term: string): Promise<boolean> {
+  const hit = sisDataCache.get(term);
+  if (hit && Date.now() - hit.at < SIS_DATA_CACHE_MS) return hit.value;
+
+  const value = await fetchTermHasSisData(term);
+  sisDataCache.set(term, { value, at: Date.now() });
+  return value;
+}
+
+async function fetchTermHasSisData(term: string): Promise<boolean> {
+  const db = getDb();
+  if (db) {
+    const row = db
+      .prepare("SELECT has_sis_data FROM available_terms WHERE term = ?")
+      .get(term) as { has_sis_data: number } | undefined;
+    return row ? row.has_sis_data === 1 : false;
+  }
+
+  const { data } = await supabase
+    .from("available_terms")
+    .select("has_sis_data")
+    .eq("term", term)
+    .maybeSingle();
+
+  return data?.has_sis_data ?? false;
+}
+
 /** Get program tags for a specific program */
 export async function getProgramTags(programName: string) {
   const db = getDb();

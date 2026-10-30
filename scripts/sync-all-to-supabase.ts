@@ -42,6 +42,10 @@ async function syncTable(
 
 async function main() {
   const what = process.argv[2]; // specific table or "all"
+  // Optional term filter for `courses`, e.g. `sync:supabase courses "Spring 2027"`.
+  // Without it every term is re-pushed, which overwrites seats that the daily
+  // cron has already refreshed in production with whatever SQLite last scraped.
+  const termFilter = process.argv[3];
 
   if (!what || what === "all" || what === "available_terms") {
     await syncTable(
@@ -60,9 +64,12 @@ async function main() {
   }
 
   if (!what || what === "all" || what === "courses") {
+    if (termFilter) console.log(`\ncourses: limiting to term "${termFilter}"`);
     await syncTable(
       "courses",
-      "SELECT * FROM courses",
+      termFilter
+        ? `SELECT * FROM courses WHERE term = '${termFilter.replace(/'/g, "''")}'`
+        : "SELECT * FROM courses",
       "offering_name,section_name,term",
       (r) => ({
         offering_name: r.offering_name,
@@ -101,6 +108,46 @@ async function main() {
         num_evaluations: r.num_evaluations || 0,
         num_respondents: r.num_respondents || 0,
         pos_tags: r.pos_tags || "",
+      })
+    );
+  }
+
+  if (!what || what === "all" || what === "professors") {
+    await syncTable(
+      "professors",
+      "SELECT * FROM professors",
+      "first_name,last_name,department",
+      (r) => ({
+        first_name: r.first_name,
+        last_name: r.last_name,
+        department: r.department,
+        avg_rating: r.avg_rating,
+        avg_difficulty: r.avg_difficulty,
+        num_ratings: r.num_ratings,
+        would_take_again_pct: r.would_take_again_pct,
+        rmp_id: r.rmp_id,
+      })
+    );
+  }
+
+  if (!what || what === "all" || what === "evaluations") {
+    await syncTable(
+      "evaluations",
+      "SELECT * FROM evaluations",
+      "instance_key",
+      (r) => ({
+        course_code: r.course_code,
+        instance_key: r.instance_key,
+        course_name: r.course_name || "",
+        instructor: r.instructor || "",
+        term: r.term || "",
+        overall_quality: r.overall_quality,
+        instructor_effectiveness: r.instructor_effectiveness,
+        intellectual_challenge: r.intellectual_challenge,
+        workload: r.workload,
+        feedback_usefulness: r.feedback_usefulness,
+        num_respondents: r.num_respondents || 0,
+        num_enrolled: r.num_enrolled || 0,
       })
     );
   }

@@ -1,42 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { fetchSchoolTerm, toCourseRow, SISApiError, type SISCourse } from "@/lib/sis-api";
 
 export const maxDuration = 300;
-
-const BASE_URL = "https://sis.jhu.edu/api/classes";
 
 const SCHOOLS = [
   "Krieger School of Arts and Sciences",
   "Krieger School of Arts and Sciences Advanced Academic Programs",
   "Whiting School of Engineering",
 ];
-
-interface SISCourse {
-  OfferingName: string;
-  SectionName: string;
-  Title: string;
-  Credits: string;
-  Department: string;
-  SchoolName: string;
-  Level: string;
-  Status: string;
-  DOW: string;
-  TimeOfDay: string;
-  Meetings: string;
-  Location: string;
-  Building: string;
-  InstructionMethod: string;
-  Instructors: string;
-  InstructorsFullName: string;
-  MaxSeats: string;
-  OpenSeats: string;
-  Waitlisted: string;
-  IsWritingIntensive: string;
-  Areas: string;
-  Repeatable: string;
-  Term: string;
-  TermStartDate: string;
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getCurrentTerm(supabase: any): Promise<string | null> {
@@ -48,13 +20,6 @@ async function getCurrentTerm(supabase: any): Promise<string | null> {
     .maybeSingle();
   if (error || !data) return null;
   return data.term as string;
-}
-
-async function fetchSchool(school: string, term: string, apiKey: string): Promise<SISCourse[]> {
-  const url = `${BASE_URL}/${encodeURIComponent(school)}/${encodeURIComponent(term)}?key=${apiKey}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return [];
-  return (await res.json()) as SISCourse[];
 }
 
 export async function GET(request: Request) {
@@ -76,41 +41,24 @@ export async function GET(request: Request) {
 
   const started = Date.now();
   const allRows: SISCourse[] = [];
+  const fetchErrors: string[] = [];
   for (const school of SCHOOLS) {
-    const rows = await fetchSchool(school, term, apiKey);
-    allRows.push(...rows);
+    try {
+      allRows.push(...(await fetchSchoolTerm(school, term, apiKey)));
+    } catch (err) {
+      fetchErrors.push(`${school}: ${err instanceof SISApiError ? err.message : String(err)}`);
+    }
+  }
+  if (allRows.length === 0) {
+    // Nothing came back (bad key, host moved, SIS down). Leave stored data alone.
+    return NextResponse.json({ term, fetched: 0, updated: 0, failed: 0, fetchErrors, durationMs: Date.now() - started }, { status: 502 });
   }
 
   let updated = 0;
   let failed = 0;
   let firstError: string | null = null;
   for (let i = 0; i < allRows.length; i += 500) {
-    const chunk = allRows.slice(i, i + 500).map((c) => ({
-      offering_name: c.OfferingName,
-      section_name: c.SectionName,
-      title: c.Title,
-      credits: c.Credits,
-      department: c.Department,
-      school_name: c.SchoolName,
-      level: c.Level,
-      status: c.Status,
-      dow: c.DOW,
-      time_of_day: c.TimeOfDay,
-      meetings: c.Meetings,
-      location: c.Location,
-      building: c.Building,
-      instruction_method: c.InstructionMethod,
-      instructors: c.Instructors,
-      instructors_full_name: c.InstructorsFullName,
-      max_seats: c.MaxSeats,
-      open_seats: c.OpenSeats,
-      waitlisted: c.Waitlisted,
-      is_writing_intensive: c.IsWritingIntensive,
-      areas: c.Areas,
-      repeatable: c.Repeatable,
-      term: c.Term,
-      term_start_date: c.TermStartDate,
-    }));
+    const chunk = allRows.slice(i, i + 500).map(toCourseRow);
     const { error } = await supabase
       .from("courses")
       .upsert(chunk, { onConflict: "offering_name,section_name,term" });
@@ -126,6 +74,7 @@ export async function GET(request: Request) {
     updated,
     failed,
     firstError,
+    fetchErrors,
     durationMs: Date.now() - started,
   });
 }

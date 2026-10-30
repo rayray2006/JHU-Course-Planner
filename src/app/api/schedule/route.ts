@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { NextResponse, NextRequest } from "next/server";
 import { cookies } from "next/headers";
+import { CURRENT_TERM } from "@/lib/terms";
 
 async function getSessionId() {
   const cookieStore = await cookies();
@@ -13,7 +14,7 @@ async function getSessionId() {
 
 export async function GET(req: NextRequest) {
   const sessionId = await getSessionId();
-  const term = req.nextUrl.searchParams.get("term") || "Fall 2026";
+  const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
 
   // Get scheduled course keys for this term
   const { data: scheduleRows } = await supabase
@@ -107,7 +108,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const sessionId = await getSessionId();
-  const { offering_name, section_name, term = "Fall 2026" } = await req.json();
+  const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
 
   const { error } = await supabase.from("schedules").upsert(
     { session_id: sessionId, offering_name, section_name, term },
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const sessionId = await getSessionId();
-  const { offering_name, section_name, term = "Fall 2026" } = await req.json();
+  const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
 
   let query = supabase
     .from("schedules")

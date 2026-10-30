@@ -1,17 +1,30 @@
 import { createClient } from "@supabase/supabase-js";
+import { PRICING } from "./model-config";
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-// Gemini 2.5 Flash Vertex AI pricing (per token)
-const INPUT_COST_PER_TOKEN = 0.30 / 1_000_000;   // $0.30 per 1M input tokens
-const OUTPUT_COST_PER_TOKEN = 2.50 / 1_000_000;   // $2.50 per 1M output tokens
+const INPUT_COST_PER_TOKEN = PRICING.input;
+const OUTPUT_COST_PER_TOKEN = PRICING.output;
 
 const BUDGET_LIMIT = 150; // dollars — cut off at $150 to preserve credits
 
+/**
+ * The budget gate used to sit on the critical path: every chat request paid a
+ * Supabase round trip before the model was even called. The running total only
+ * matters near the $150 cutoff, so a short cache is enough — and `recordUsage`
+ * refreshes it from its own read, so the cached figure tracks real spend.
+ */
+const BUDGET_CACHE_MS = 60_000;
+let cachedTotal: { cost: number; at: number } | null = null;
+
 export async function checkBudget(): Promise<{ allowed: boolean; totalCost: number }> {
+  if (cachedTotal && Date.now() - cachedTotal.at < BUDGET_CACHE_MS) {
+    return { allowed: cachedTotal.cost < BUDGET_LIMIT, totalCost: cachedTotal.cost };
+  }
+
   const { data } = await supabase
     .from("cost_tracking")
     .select("total_cost")
@@ -19,13 +32,19 @@ export async function checkBudget(): Promise<{ allowed: boolean; totalCost: numb
     .single();
 
   const totalCost = data?.total_cost ?? 0;
+  cachedTotal = { cost: totalCost, at: Date.now() };
   return { allowed: totalCost < BUDGET_LIMIT, totalCost };
 }
 
+/**
+ * Call this ONCE per request with the totals summed across every step, from the
+ * route's `onFinish`. It was previously called from `onStepFinish`, which put a
+ * select plus an update between each LLM call — two round trips of dead air in
+ * the middle of a stream the user was already watching.
+ */
 export async function recordUsage(inputTokens: number, outputTokens: number): Promise<number> {
   const cost = (inputTokens * INPUT_COST_PER_TOKEN) + (outputTokens * OUTPUT_COST_PER_TOKEN);
 
-  // Upsert: increment the running total
   const { data: existing } = await supabase
     .from("cost_tracking")
     .select("total_cost, total_input_tokens, total_output_tokens, request_count")
@@ -56,5 +75,7 @@ export async function recordUsage(inputTokens: number, outputTokens: number): Pr
       });
   }
 
-  return (existing?.total_cost ?? 0) + cost;
+  const total = (existing?.total_cost ?? 0) + cost;
+  cachedTotal = { cost: total, at: Date.now() };
+  return total;
 }

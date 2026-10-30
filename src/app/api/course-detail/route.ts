@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { getCoursePosTags } from "@/lib/data";
 import { NextRequest, NextResponse } from "next/server";
+import { CURRENT_TERM } from "@/lib/terms";
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
@@ -8,7 +9,7 @@ export async function GET(req: NextRequest) {
 
   const section = req.nextUrl.searchParams.get("section");
   const full = req.nextUrl.searchParams.get("full");
-  const term = req.nextUrl.searchParams.get("term") || "Fall 2026";
+  const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
 
   // Full course data (for schedule preview)
   if (full && section) {
@@ -23,17 +24,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data || null);
   }
 
-  // Get PosTags
-  const posTags = await getCoursePosTags(code);
-
-  // Try courses table first (term-scoped)
-  const { data } = await supabase
-    .from("courses")
-    .select("description, prerequisites, corequisites, restrictions, overall_quality, instructor_effectiveness, intellectual_challenge, workload, feedback_usefulness, num_evaluations, num_respondents, areas")
-    .eq("offering_name", code)
-    .eq("term", term)
-    .limit(1)
-    .single();
+  // Both are always needed and neither depends on the other, so they go out
+  // together — the queries are fast, it's the round trip that costs ~350ms.
+  const [posTags, { data }] = await Promise.all([
+    getCoursePosTags(code),
+    supabase
+      .from("courses")
+      .select("description, prerequisites, corequisites, restrictions, overall_quality, instructor_effectiveness, intellectual_challenge, workload, feedback_usefulness, num_evaluations, num_respondents, areas")
+      .eq("offering_name", code)
+      .eq("term", term)
+      .limit(1)
+      .single(),
+  ]);
 
   if (data) return NextResponse.json({ ...data, pos_tags: posTags });
 
