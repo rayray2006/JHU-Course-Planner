@@ -1473,7 +1473,11 @@ export default function Home() {
                 </div>
               )}
             </div>
-          ) : schedule.length === 0 ? (
+          ) : schedule.length === 0 && !previewCourse ? (
+            // Keep the grid up while a section is being previewed: on an empty
+            // schedule the placeholder would otherwise replace the very thing
+            // the hover is meant to draw on, so the first course you look at
+            // appears to preview nothing at all.
             <div className="flex items-center justify-center h-full">
               <div className="text-center space-y-2 max-w-xs">
                 <div className="mx-auto w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300 text-xl">
