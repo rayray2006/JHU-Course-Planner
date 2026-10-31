@@ -2,7 +2,7 @@ import { createAgentUIStreamResponse, UIMessage } from "ai";
 import { createCourseAgent } from "@/lib/agents/course-agent";
 import { setSessionId, setActiveTerm } from "@/lib/tools/schedule-tools";
 import { checkBudget, recordUsage } from "@/lib/cost-tracker";
-import { cookies } from "next/headers";
+import { resolveSessionId } from "@/lib/session";
 import { termHasSisData } from "@/lib/data";
 import { CURRENT_TERM } from "@/lib/terms";
 
@@ -27,9 +27,9 @@ export async function POST(req: Request) {
   const activeTerm = bodyTerm || CURRENT_TERM;
   const selectedPrograms = bodyPrograms || [];
 
-  const cookieStore = await cookies();
-  let sessionId = cookieStore.get("schedule_session")?.value;
-  if (!sessionId) sessionId = "default";
+  // Must run before the stream opens: a cookie cannot be set once the
+  // response has started streaming.
+  const sessionId = await resolveSessionId();
   setSessionId(sessionId);
   setActiveTerm(activeTerm);
 

@@ -1,19 +1,10 @@
 import { supabase } from "@/lib/supabase";
 import { NextResponse, NextRequest } from "next/server";
-import { cookies } from "next/headers";
 import { CURRENT_TERM } from "@/lib/terms";
-
-async function getSessionId() {
-  const cookieStore = await cookies();
-  let sessionId = cookieStore.get("schedule_session")?.value;
-  if (!sessionId) {
-    sessionId = crypto.randomUUID();
-  }
-  return sessionId;
-}
+import { resolveSessionId } from "@/lib/session";
 
 export async function GET(req: NextRequest) {
-  const sessionId = await getSessionId();
+  const sessionId = await resolveSessionId();
   const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
 
   // Get scheduled course keys for this term
@@ -107,7 +98,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const sessionId = await getSessionId();
+  const sessionId = await resolveSessionId();
   const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
 
   const { error } = await supabase.from("schedules").upsert(
@@ -115,13 +106,13 @@ export async function POST(req: NextRequest) {
     { onConflict: "session_id,offering_name,section_name,term" }
   );
 
-  const res = NextResponse.json({ success: !error, message: error?.message || "Added" });
-  res.cookies.set("schedule_session", sessionId, { httpOnly: true, sameSite: "lax", maxAge: 60 * 60 * 24 * 365 });
-  return res;
+  // resolveSessionId has already issued the cookie if this caller arrived
+  // without one, so there is nothing to attach here.
+  return NextResponse.json({ success: !error, message: error?.message || "Added" });
 }
 
 export async function DELETE(req: NextRequest) {
-  const sessionId = await getSessionId();
+  const sessionId = await resolveSessionId();
   const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
 
   let query = supabase

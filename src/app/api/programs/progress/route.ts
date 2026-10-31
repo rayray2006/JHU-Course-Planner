@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { getProgramSchema, getPosTags } from "@/lib/data";
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { resolveSessionId } from "@/lib/session";
 
 interface ScheduledCourse {
   offering_name: string;
@@ -312,8 +312,7 @@ export async function GET(req: NextRequest) {
   const isGrad = /Master|PhD|Doctoral|MSE|MS\b/i.test(name);
   const otherIsGrad = otherPrograms.some((p) => /Master|PhD|Doctoral|MSE|MS\b/i.test(p));
 
-  const cookieStore = await cookies();
-  const sessionId = cookieStore.get("schedule_session")?.value || "default";
+  const sessionId = await resolveSessionId();
 
   // Fetch ALL scheduled courses across all terms
   const { data: scheduleRows } = await supabase
