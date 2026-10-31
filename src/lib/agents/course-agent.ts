@@ -65,7 +65,20 @@ export function createCourseAgent(activeTerm: string, hasSisData: boolean, selec
       vertex: { thinkingConfig: { thinkingBudget: 0 } },
     },
     stopWhen: stepCountIs(5),
-    instructions: `Concise JHU course advisor. Term: ${activeTerm}.${catalogueNote}
+    // One cache breakpoint on the system message covers the whole constant
+    // prefix. Anthropic orders the prompt tools -> system -> messages and
+    // caches everything up to and including the breakpoint, so this catches
+    // the 13 tool schemas as well as the instructions below.
+    //
+    // Measured before this: a single "what is EN.601.226 about?" spent 13,786
+    // input tokens against 94 output, because the ~4.3K-token prefix was
+    // re-sent in full on every step (4400 / 4609 / 4777). The default 5-minute
+    // TTL is deliberate — the steps within one request already reuse it, so
+    // this pays off even when no second request arrives.
+    instructions: {
+      role: "system" as const,
+      providerOptions: { anthropic: { cacheControl: { type: "ephemeral" as const } } },
+      content: `Concise JHU course advisor. Term: ${activeTerm}.${catalogueNote}
 
 FORMAT: One line per course: * EN.601.226 Data Structures — Instructor — MWF 12:00PM
 - Only show sections if they differ in time/instructor.
@@ -174,6 +187,7 @@ Degree progress and requirements:
 - Available programs: CS BS, CS MSE, BME BS, BME MSE, AMS BS
 
 Always be conversational and helpful. If the user's query is ambiguous, ask clarifying questions.`,
+    },
     tools,
   });
 }

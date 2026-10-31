@@ -11,6 +11,10 @@ const OUTPUT_COST_PER_TOKEN = PRICING.output;
 
 const BUDGET_LIMIT = 150; // dollars — cut off at $150 to preserve credits
 
+/** Anthropic cache pricing, relative to the base input rate. */
+const CACHE_READ_MULTIPLIER = 0.1;
+const CACHE_WRITE_MULTIPLIER = 1.25; // 5-minute TTL; a 1-hour write is 2x
+
 /**
  * The budget gate used to sit on the critical path: every chat request paid a
  * Supabase round trip before the model was even called. The running total only
@@ -42,8 +46,23 @@ export async function checkBudget(): Promise<{ allowed: boolean; totalCost: numb
  * select plus an update between each LLM call — two round trips of dead air in
  * the middle of a stream the user was already watching.
  */
-export async function recordUsage(inputTokens: number, outputTokens: number): Promise<number> {
-  const cost = (inputTokens * INPUT_COST_PER_TOKEN) + (outputTokens * OUTPUT_COST_PER_TOKEN);
+export async function recordUsage(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens = 0,
+  cacheWriteTokens = 0
+): Promise<number> {
+  // Anthropic bills a cached read at a tenth of the input rate and a 5-minute
+  // cache write at 1.25x. inputTokens counts every input token including the
+  // cached ones, so charging it whole would overstate spend badly now that the
+  // tool schemas and system prompt are cached — and this figure gates the
+  // $150 cutoff, so overstating it would shut the app off early.
+  const uncachedTokens = Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens);
+  const cost =
+    uncachedTokens * INPUT_COST_PER_TOKEN +
+    cacheReadTokens * INPUT_COST_PER_TOKEN * CACHE_READ_MULTIPLIER +
+    cacheWriteTokens * INPUT_COST_PER_TOKEN * CACHE_WRITE_MULTIPLIER +
+    outputTokens * OUTPUT_COST_PER_TOKEN;
 
   const { data: existing } = await supabase
     .from("cost_tracking")
