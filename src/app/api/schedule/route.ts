@@ -18,81 +18,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
-  // Check if any are PLAN/TAKEN entries (future planning or past courses recorded without section)
-  const planEntries = scheduleRows.filter((r) => r.section_name === "PLAN" || r.section_name === "TAKEN");
-  const scheduleEntries = scheduleRows.filter((r) => r.section_name !== "PLAN" && r.section_name !== "TAKEN");
-
+  // PLAN/TAKEN entries are no longer created: the planner is pinned to a
+  // single term, so there is no past-term "courses taken" flow and no
+  // section-less plan rows. Older rows of that shape simply do not render.
   const results: Record<string, unknown>[] = [];
 
-  // Fetch regular schedule entries from courses table
-  if (scheduleEntries.length > 0) {
-    const orFilter = scheduleEntries
-      .map((r) => `and(offering_name.eq.${r.offering_name},section_name.eq.${r.section_name})`)
-      .join(",");
+  const orFilter = scheduleRows
+    .map((r) => `and(offering_name.eq.${r.offering_name},section_name.eq.${r.section_name})`)
+    .join(",");
 
-    const { data: courses } = await supabase
-      .from("courses")
-      .select("offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level")
-      .eq("term", term)
-      .or(orFilter);
+  const { data: courses } = await supabase
+    .from("courses")
+    .select("offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level")
+    .eq("term", term)
+    .or(orFilter);
 
-    if (courses) results.push(...courses);
-  }
-
-  // Fetch PLAN/TAKEN entries — try courses table first (past terms), then catalogue
-  if (planEntries.length > 0) {
-    const codes = planEntries.map((r) => r.offering_name);
-    const sectionMap = new Map(planEntries.map((r) => [r.offering_name, r.section_name]));
-    const found = new Set<string>();
-
-    // Try courses table first (for past terms that have SIS data)
-    const { data: courseData } = await supabase
-      .from("courses")
-      .select("offering_name, title, credits, meetings, instructors_full_name, department")
-      .in("offering_name", codes)
-      .eq("term", term);
-
-    if (courseData) {
-      const seen = new Set<string>();
-      for (const c of courseData) {
-        if (seen.has(c.offering_name)) continue;
-        seen.add(c.offering_name);
-        found.add(c.offering_name);
-        const sec = sectionMap.get(c.offering_name) || "TAKEN";
-        results.push({
-          offering_name: c.offering_name, section_name: sec, title: c.title,
-          credits: c.credits, meetings: c.meetings || "", location: "", building: "",
-          instructors_full_name: c.instructors_full_name || "", instruction_method: "",
-          department: c.department, status: sec === "TAKEN" ? "Taken" : "Planned",
-          school_name: "", level: "",
-        });
-      }
-    }
-
-    // Fall back to catalogue for remaining
-    const remaining = codes.filter((c) => !found.has(c));
-    if (remaining.length > 0) {
-      const { data: catCourses } = await supabase
-        .from("catalogue")
-        .select("offering_name, title, credits, department")
-        .in("offering_name", remaining);
-
-      if (catCourses) {
-        results.push(
-          ...catCourses.map((c) => {
-            const sec = sectionMap.get(c.offering_name) || "PLAN";
-            return {
-              offering_name: c.offering_name, section_name: sec, title: c.title,
-              credits: c.credits, meetings: "", location: "", building: "",
-              instructors_full_name: "", instruction_method: "",
-              department: c.department, status: sec === "TAKEN" ? "Taken" : "Planned",
-              school_name: "", level: "",
-            };
-          })
-        );
-      }
-    }
-  }
+  if (courses) results.push(...courses);
 
   return NextResponse.json(results);
 }

@@ -270,77 +270,13 @@ function splitPrerequisites(raw: string): { restrictions: string[]; prereqs: str
 
 // ===================== COMPONENT =====================
 
-interface TermInfo {
-  term: string;
-  sort_order: number;
-  has_sis_data: boolean;
-  course_count: number;
-  is_current: boolean;
-}
-
 export default function Home() {
   const isMobile = useIsMobile();
-  const [activeTerm, setActiveTermState] = useState(CURRENT_TERM);
-  const [availableTerms, setAvailableTerms] = useState<TermInfo[]>([]);
-  const termsLoaded = availableTerms.length > 0;
-  const hasSisData = availableTerms.find((t) => t.term === activeTerm)?.has_sis_data ?? true;
-  // Default isCurrentTerm to true for the default term before terms load, to avoid layout flash
-  const isCurrentTerm = termsLoaded
-    ? (availableTerms.find((t) => t.term === activeTerm)?.is_current ?? false)
-    : true;
-  const isPastTerm = termsLoaded && hasSisData && !isCurrentTerm;
-  const showCalendar = isCurrentTerm;
-
-  // Enrollment period — filters which terms show in dropdown (persisted)
-  const [enrollStart, setEnrollStart] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("jhu_enrollStart") || "F24";
-    return "F24";
-  });
-  const [enrollEnd, setEnrollEnd] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("jhu_enrollEnd") || "S27";
-    return "S27";
-  });
-  useEffect(() => { localStorage.setItem("jhu_enrollStart", enrollStart); }, [enrollStart]);
-  useEffect(() => { localStorage.setItem("jhu_enrollEnd", enrollEnd); }, [enrollEnd]);
-
-  // Parse "F24" → { season: "Fall", year: 2024, sort: N } or "S27" → { season: "Spring", year: 2027 }
-  const parseEnrollCode = useCallback((code: string) => {
-    const m = code.toUpperCase().match(/^([FS])(\d{2})$/);
-    if (!m) return null;
-    const season = m[1] === "F" ? "Fall" : "Spring";
-    const year = 2000 + parseInt(m[2]);
-    return { season, year, term: `${season} ${year}` };
-  }, []);
-
-  const filteredTerms = useMemo(() => {
-    const start = parseEnrollCode(enrollStart);
-    const end = parseEnrollCode(enrollEnd);
-    let termWindow = availableTerms;
-    if (start && end) {
-      const startIdx = availableTerms.findIndex((t) => t.term === start.term);
-      const endIdx = availableTerms.findIndex((t) => t.term === end.term);
-      if (startIdx !== -1 && endIdx !== -1) {
-        termWindow = availableTerms.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
-      }
-    }
-    // The enrolment window is persisted in localStorage, so anyone who set it
-    // before the app moved on to a newer term would find that term missing
-    // from the picker — including the one they are currently looking at.
-    const pinned = availableTerms.filter((t) => t.term === activeTerm || t.is_current);
-    const merged = [...termWindow];
-    for (const t of pinned) if (!merged.some((m) => m.term === t.term)) merged.push(t);
-    return merged.sort((a, b) => a.sort_order - b.sort_order);
-  }, [availableTerms, enrollStart, enrollEnd, parseEnrollCode, activeTerm]);
-
-  // Fetch available terms on mount
-  useEffect(() => {
-    fetch("/api/terms")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.terms) setAvailableTerms(d.terms);
-      })
-      .catch(() => {});
-  }, []);
+  // The planner is pinned to one term. The picker, the enrolment window and
+  // the past-term "courses taken" flow are gone, so every derived term flag
+  // that used to branch on them is now a constant. Schedules saved against
+  // other terms stay in the database but are no longer reachable here.
+  const activeTerm = CURRENT_TERM;
 
   // selectedPrograms must be declared before chatTransport
   const [selectedPrograms, setSelectedPrograms] = useState<string[]>(() => {
@@ -395,8 +331,7 @@ export default function Home() {
     if (q.length < 2) { setSearchResults([]); return; }
     setSearchLoading(true);
     try {
-      const mode = isPastTerm ? "past" : !hasSisData ? "catalogue" : "term";
-      const res = await fetch(`/api/course-search?q=${encodeURIComponent(q)}&term=${encodeURIComponent(activeTerm)}&mode=${mode}`);
+      const res = await fetch(`/api/course-search?q=${encodeURIComponent(q)}&term=${encodeURIComponent(activeTerm)}&mode=term`);
       if (res.ok) setSearchResults(await res.json());
       else setSearchResults([]);
     } catch { setSearchResults([]); }
@@ -562,31 +497,6 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schedule]);
 
-  // Term dropdown state
-  const [termOpen, setTermOpen] = useState(false);
-  const termRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!termOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (termRef.current && !termRef.current.contains(e.target as Node)) setTermOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [termOpen]);
-
-  // Search results and the open detail panel belong to the term they came
-  // from, so drop them. The schedule refetches on its own: fetchSchedule is
-  // keyed to activeTerm.
-  const selectTerm = useCallback((term: string) => {
-    setActiveTermState(term);
-    setTermOpen(false);
-    setSearchQuery("");
-    setSearchResults([]);
-    setSearchOpen(false);
-    setExpandedSearchCourse(null);
-    setSelected(null);
-  }, []);
-
   // Build valid course codes + ordered section list from tool outputs
   const { validCourses, courseSections } = useMemo(() => {
     const codes = new Set<string>();
@@ -637,7 +547,7 @@ export default function Home() {
     } catch {
       if (previewActiveKey.current === key) setPreviewCourse(null);
     }
-  }, []);
+  }, [activeTerm]);
   const clearPreview = useCallback(() => {
     previewActiveKey.current = null;
     setPreviewCourse(null);
@@ -756,7 +666,7 @@ export default function Home() {
     });
 
     return () => { cancelled = true; };
-  }, [selected]);
+  }, [selected, activeTerm]);
 
   const isActive = status === "submitted" || status === "streaming";
 
@@ -846,41 +756,10 @@ export default function Home() {
       <main className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <div className="flex items-center gap-3 px-4 h-12 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0 relative z-[100]">
-          {/* Title + Enrollment + Term */}
+          {/* Title + Term */}
           <div className="flex items-center gap-2 shrink-0">
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight">JHU Planner</h1>
-            <div className="relative" ref={termRef}>
-              <button
-                type="button"
-                onClick={() => setTermOpen((o) => !o)}
-                aria-haspopup="listbox"
-                aria-expanded={termOpen}
-                aria-label={`Term: ${activeTerm}. Change term`}
-                className="flex items-center gap-1 px-1.5 py-0.5 -mx-1 rounded text-[11px] font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-              >
-                {activeTerm}
-                <svg className={`w-3 h-3 transition-transform ${termOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-              </button>
-              {termOpen && (
-                <div role="listbox" className="absolute left-0 top-full mt-1 w-48 max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg py-1 z-[200]">
-                  {filteredTerms.map((t) => (
-                    <button
-                      key={t.term}
-                      type="button"
-                      role="option"
-                      aria-selected={t.term === activeTerm}
-                      onClick={() => selectTerm(t.term)}
-                      className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-slate-50 transition-colors ${t.term === activeTerm ? "font-semibold text-blue-600" : "text-slate-600"}`}
-                    >
-                      <span className="truncate">{t.term}</span>
-                      <span className="shrink-0 text-[10px] text-slate-400">
-                        {t.has_sis_data ? t.course_count.toLocaleString() : "plan"}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <span className="text-[11px] font-medium text-slate-500">{activeTerm}</span>
           </div>
 
           {/* Search bar */}
@@ -920,10 +799,10 @@ export default function Home() {
                     const dc = deptColor(first.department);
                     const isExpanded = expandedSearchCourse === code;
                     const visibleSections = isExpanded ? expandedSections : sections;
-                    const canExpand = !isCatalogue && !isPastTerm;
+                    const canExpand = !isCatalogue;
 
                     const addSection = async (r: typeof first) => {
-                      const sectionName = isCatalogue ? "PLAN" : isPastTerm ? "TAKEN" : r.section_name;
+                      const sectionName = r.section_name;
                       await fetch("/api/schedule", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -1006,7 +885,7 @@ export default function Home() {
                                 <button
                                   key={si}
                                   onClick={() => { if (!secInSchedule) addSection(r); }}
-                                  onMouseEnter={() => { if (r.section_name && hasSisData) handlePreview(r.offering_name, r.section_name); }}
+                                  onMouseEnter={() => { if (r.section_name) handlePreview(r.offering_name, r.section_name); }}
                                   onMouseLeave={clearPreview}
                                   className={`w-full text-left pl-7 pr-3 py-1.5 flex items-center gap-2 text-[10px] transition-colors ${secInSchedule ? "opacity-40 cursor-default" : "hover:bg-blue-50 cursor-pointer"}`}
                                 >
@@ -1400,80 +1279,7 @@ export default function Home() {
 
         {/* Grid area */}
         <div className="flex-1 overflow-auto relative">
-          {!showCalendar ? (
-            <div className="h-full flex flex-col">
-              {/* List header */}
-              <div className="px-5 py-3 border-b border-slate-100 bg-slate-50/50">
-                <div className="flex items-center gap-2">
-                  <div className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold ${isPastTerm ? "bg-blue-100 text-blue-500" : "bg-violet-100 text-violet-500"}`}>
-                    {isPastTerm ? "✓" : "P"}
-                  </div>
-                  <span className="text-xs font-semibold text-slate-600">
-                    {activeTerm} — {isPastTerm ? "Courses Taken" : hasSisData ? "Course List" : "Course Plan"}
-                  </span>
-                  <span className="text-[10px] text-slate-400 ml-auto">
-                    {schedule.length > 0 ? `${schedule.length} course${schedule.length !== 1 ? "s" : ""} · ${totalCredits} cr` : isPastTerm ? "No courses recorded" : "No courses planned yet"}
-                  </span>
-                </div>
-              </div>
-
-              {schedule.length === 0 ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center space-y-2 max-w-xs px-4">
-                    <div className={`mx-auto w-10 h-10 rounded-lg border flex items-center justify-center text-lg ${isPastTerm ? "bg-blue-50 border-blue-100 text-blue-300" : "bg-violet-50 border-violet-100 text-violet-300"}`}>+</div>
-                    <p className="text-xs font-medium text-slate-500">
-                      {isPastTerm ? `Add courses taken in ${activeTerm}` : `Plan courses for ${activeTerm}`}
-                    </p>
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      {isPastTerm
-                        ? "Search for courses you completed and add them to track your progress."
-                        : hasSisData ? "Use the search bar or chat to find and add courses." : "Use the search bar or chat to find courses and add them to your plan. Sections and times aren\u2019t available yet."}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-auto px-4 py-3 space-y-1.5">
-                  {schedule.map((c) => {
-                    const dc = deptColor(c.department);
-                    return (
-                      <div
-                        key={`${c.offering_name}-${c.section_name}`}
-                        onClick={() => setSelected(selected?.offering_name === c.offering_name ? null : c)}
-                        className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-slate-100 bg-white hover:border-slate-200 transition-colors group/card cursor-pointer"
-                      >
-                        <div className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: dc.border }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-mono font-semibold" style={{ color: dc.text }}>{c.offering_name}</span>
-                            <span className="text-[10px] text-slate-400">{c.credits} cr</span>
-                          </div>
-                          <div className="text-[11px] text-slate-700 truncate">{c.title}</div>
-                          <div className="text-[9px] truncate">
-                            <span className="text-slate-400 group-hover/card:hidden">{c.meetings && c.meetings !== "" ? `${c.meetings} · ${c.instructors_full_name || "Staff"}` : c.department || ""}</span>
-                            <span className="text-blue-400 hidden group-hover/card:inline">Click for info</span>
-                          </div>
-                        </div>
-                        <button
-                          onClick={async (e) => { e.stopPropagation();
-                            await fetch("/api/schedule", {
-                              method: "DELETE",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ offering_name: c.offering_name, section_name: c.section_name, term: activeTerm }),
-                            });
-                            fetchSchedule();
-                          }}
-                          className="text-[10px] text-slate-300 hover:text-red-400 opacity-0 group-hover/card:opacity-100 transition-all shrink-0"
-                          title="Remove from plan"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : schedule.length === 0 && !previewCourse ? (
+          {schedule.length === 0 && !previewCourse ? (
             // Keep the grid up while a section is being previewed: on an empty
             // schedule the placeholder would otherwise replace the very thing
             // the hover is meant to draw on, so the first course you look at
@@ -1635,7 +1441,7 @@ export default function Home() {
           )}
 
           {/* Courses with no meetings (TBA/online/PLAN in current term) — show as list below calendar */}
-          {showCalendar && (() => {
+          {(() => {
             const ghostCourses = schedule.filter((c) => {
               if (!c.meetings || c.meetings === "" || c.meetings === "TBA") return true;
               if (c.section_name === "PLAN" || c.section_name === "TAKEN") return true;
