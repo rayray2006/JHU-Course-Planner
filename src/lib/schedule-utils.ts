@@ -26,18 +26,47 @@ export interface MeetingBlock {
   endMin: number;
 }
 
-const DAY_MAP: Record<string, number[]> = {
-  M: [0], T: [1], W: [2], Th: [3], F: [4], Sa: [5], S: [6],
-  MW: [0, 2], MF: [0, 4], MWF: [0, 2, 4], TTh: [1, 3],
-  MT: [0, 1], MTW: [0, 1, 2], TWTh: [1, 2, 3], WF: [2, 4],
-  TF: [1, 4], ThF: [3, 4],
-  TWThF: [1, 2, 3, 4], MTWThF: [0, 1, 2, 3, 4], MTThF: [0, 1, 3, 4],
+const DAY_INDEX: Record<string, number> = {
+  M: 0, T: 1, W: 2, Th: 3, F: 4, Sa: 5, S: 6,
 };
 
+/**
+ * Split a SIS day string like "WTh" or "SMTWThFSa" into day indices.
+ *
+ * SIS emits arbitrary combinations, so this tokenizes rather than looking up a
+ * fixed table of known patterns — the table approach silently dropped any
+ * combination nobody had hit yet ("WTh", "MTWTh", "MTh", …), which made the
+ * course show up as having no scheduled time at all.
+ *
+ * Two-letter days are matched before single letters, since "Th" must win over
+ * "T" and "Sa" over a bare "S" (which is Sunday).
+ */
+function parseDays(dayStr: string): number[] | null {
+  const days: number[] = [];
+  let i = 0;
+  while (i < dayStr.length) {
+    const two = dayStr.slice(i, i + 2);
+    if (two === "Th" || two === "Sa") {
+      days.push(DAY_INDEX[two]);
+      i += 2;
+      continue;
+    }
+    const idx = DAY_INDEX[dayStr[i]];
+    // Anything unrecognised ("None", "TBA", …) means there's no real meeting.
+    if (idx === undefined) return null;
+    days.push(idx);
+    i += 1;
+  }
+  if (days.length === 0) return null;
+  return [...new Set(days)].sort((a, b) => a - b);
+}
+
 export function parseSingleMeeting(part: string): MeetingBlock | null {
+  // A trailing label is allowed and ignored: SIS writes things like
+  // "Th 7:30PM - 10:00PM Screenings" for film sections.
   const match = part
     .trim()
-    .match(/^(\S+)\s+(\d{1,2}):(\d{2})(AM|PM)\s*-\s*(\d{1,2}):(\d{2})(AM|PM)$/);
+    .match(/^(\S+)\s+(\d{1,2}):(\d{2})(AM|PM)\s*-\s*(\d{1,2}):(\d{2})(AM|PM)(?:\s+\S.*)?$/);
   if (!match) return null;
   const [, dayStr, sh, sm, sap, eh, em, eap] = match;
   let startHour = parseInt(sh);
@@ -48,7 +77,7 @@ export function parseSingleMeeting(part: string): MeetingBlock | null {
   const endMin = parseInt(em);
   if (eap === "PM" && endHour !== 12) endHour += 12;
   if (eap === "AM" && endHour === 12) endHour = 0;
-  const days = DAY_MAP[dayStr];
+  const days = parseDays(dayStr);
   if (!days) return null;
   return { days, startHour, startMin, endHour, endMin };
 }
