@@ -3,6 +3,7 @@ import { z } from "zod";
 import { supabase } from "../supabase";
 import { CURRENT_TERM } from "../terms";
 import { DEFAULT_SCHEDULE_SLOT, parseScheduleSlot } from "../schedule-slots";
+import { expandDays, hasConflict, parseMeetingTimes } from "../meeting-time";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
@@ -21,57 +22,6 @@ export function getScheduleSlot() { return _scheduleSlot; }
 let _activeTerm = CURRENT_TERM;
 export function setActiveTerm(term: string) { _activeTerm = term; }
 export function getActiveTerm() { return _activeTerm; }
-
-// --- Time parsing helpers ---
-function expandDays(dayStr: string): string[] {
-  const days: string[] = [];
-  let i = 0;
-  while (i < dayStr.length) {
-    if (dayStr[i] === "T" && dayStr[i + 1] === "h") {
-      days.push("Th");
-      i += 2;
-    } else if (dayStr[i] === "S" && dayStr[i + 1] === "a") {
-      days.push("Sa");
-      i += 2;
-    } else if (dayStr[i] === "S" && dayStr[i + 1] !== "a") {
-      days.push("S");
-      i += 1;
-    } else {
-      days.push(dayStr[i]);
-      i += 1;
-    }
-  }
-  return days;
-}
-
-function parseMeetingTime(meetings: string): { days: string[]; startMin: number; endMin: number }[] {
-  if (!meetings) return [];
-  return meetings.split(",").map((part) => {
-    const match = part.trim().match(/^(\S+)\s+(\d{1,2}):(\d{2})(AM|PM)\s*-\s*(\d{1,2}):(\d{2})(AM|PM)$/);
-    if (!match) return null;
-    const [, dayStr, sh, sm, sap, eh, em, eap] = match;
-    let startH = parseInt(sh);
-    if (sap === "PM" && startH !== 12) startH += 12;
-    if (sap === "AM" && startH === 12) startH = 0;
-    let endH = parseInt(eh);
-    if (eap === "PM" && endH !== 12) endH += 12;
-    if (eap === "AM" && endH === 12) endH = 0;
-    return { days: expandDays(dayStr), startMin: startH * 60 + parseInt(sm), endMin: endH * 60 + parseInt(em) };
-  }).filter((b): b is NonNullable<typeof b> => b !== null);
-}
-
-function hasConflict(meetingsA: string, meetingsB: string): boolean {
-  const blocksA = parseMeetingTime(meetingsA);
-  const blocksB = parseMeetingTime(meetingsB);
-  for (const a of blocksA) {
-    for (const b of blocksB) {
-      if (a.days.some((d) => b.days.includes(d)) && a.startMin < b.endMin && a.endMin > b.startMin) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 export const addCourseToSchedule = tool({
   description: "Add a course to the user's schedule for the current semester.",
@@ -427,18 +377,7 @@ async function findNonConflictingExecute(input: any) {
     const beforeMin = input.beforeTime ? parseTimeToMin(input.beforeTime) : null;
     const afterMin = input.afterTime ? parseTimeToMin(input.afterTime) : null;
 
-    // Helper to expand day strings
-    function expandDaysLocal(dayStr: string): string[] {
-      const days: string[] = [];
-      let i = 0;
-      while (i < dayStr.length) {
-        if (dayStr[i] === "T" && dayStr[i + 1] === "h") { days.push("Th"); i += 2; }
-        else if (dayStr[i] === "S" && dayStr[i + 1] === "a") { days.push("Sa"); i += 2; }
-        else { days.push(dayStr[i]); i += 1; }
-      }
-      return days;
-    }
-    const excludeDaysExpanded = input.excludeDays ? expandDaysLocal(input.excludeDays) : null;
+    const excludeDaysExpanded = input.excludeDays ? expandDays(input.excludeDays) : null;
 
     // 3. Filter out conflicts
     const maxResults = Math.min(input.limit || 20, 50);
@@ -447,7 +386,7 @@ async function findNonConflictingExecute(input: any) {
       if (!course.meetings) return false;
       if (scheduledMeetings.some((sm) => hasConflict(sm, course.meetings))) return false;
 
-      const parsed = parseMeetingTime(course.meetings);
+      const parsed = parseMeetingTimes(course.meetings);
 
       if (beforeMin !== null || afterMin !== null) {
         if (!parsed || parsed.length === 0) return false;

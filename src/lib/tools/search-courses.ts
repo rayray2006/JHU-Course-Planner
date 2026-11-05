@@ -2,54 +2,14 @@ import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
 import { getActiveTerm } from "./schedule-tools";
+import {
+  blocksOverlap,
+  expandDays,
+  hasScheduledTime,
+  parseMeetingTimes,
+} from "../meeting-time";
 
 const COURSE_COLUMNS = "offering_name, section_name, title, credits, department, school_name, level, status, meetings, location, building, instruction_method, instructors_full_name, max_seats, open_seats, waitlisted, is_writing_intensive, areas, pos_tags, time_of_day, description, prerequisites, corequisites, restrictions, overall_quality, instructor_effectiveness, intellectual_challenge, workload, feedback_usefulness, num_evaluations, num_respondents, all_departments";
-
-// Parse "TTh 10:30AM - 11:45AM" into { days: string, startMin: number, endMin: number }
-function parseMeetingTime(meetings: string): { days: string; startMin: number; endMin: number } | null {
-  // Handle comma-separated (take first part)
-  const part = meetings.split(",")[0].trim();
-  const match = part.match(/^(\S+)\s+(\d{1,2}):(\d{2})(AM|PM)\s*-\s*(\d{1,2}):(\d{2})(AM|PM)$/);
-  if (!match) return null;
-  const [, days, sh, sm, sap, eh, em, eap] = match;
-  let startH = parseInt(sh);
-  if (sap === "PM" && startH !== 12) startH += 12;
-  if (sap === "AM" && startH === 12) startH = 0;
-  let endH = parseInt(eh);
-  if (eap === "PM" && endH !== 12) endH += 12;
-  if (eap === "AM" && endH === 12) endH = 0;
-  return { days, startMin: startH * 60 + parseInt(sm), endMin: endH * 60 + parseInt(em) };
-}
-
-function expandDays(dayStr: string): string[] {
-  const days: string[] = [];
-  let i = 0;
-  while (i < dayStr.length) {
-    if (dayStr[i] === "T" && dayStr[i + 1] === "h") { days.push("Th"); i += 2; }
-    else if (dayStr[i] === "S" && dayStr[i + 1] === "a") { days.push("Sa"); i += 2; }
-    else if (dayStr[i] === "S" && dayStr[i + 1] !== "a") { days.push("S"); i += 1; }
-    else { days.push(dayStr[i]); i += 1; }
-  }
-  return days;
-}
-
-function daysOverlap(a: string, b: string): boolean {
-  const aDays = expandDays(a);
-  const bDays = expandDays(b);
-  return aDays.some((d) => bDays.includes(d));
-}
-
-function timesOverlap(a: { startMin: number; endMin: number }, b: { startMin: number; endMin: number }): boolean {
-  return a.startMin < b.endMin && a.endMin > b.startMin;
-}
-
-function hasScheduledTime(meetings: string | undefined | null): boolean {
-  if (!meetings) return false;
-  const m = meetings.trim();
-  if (!m) return false;
-  if (/^(TBA|TBD|TBR|None|Hours Arranged|Arranged)$/i.test(m)) return false;
-  return parseMeetingTime(m) !== null;
-}
 
 export const searchCourses = tool({
   description: "Search courses for the selected term. Returns up to 20 results.",
@@ -378,17 +338,13 @@ async function searchCoursesExecute(input: any) {
     // Apply overlap filter client-side (can't do time parsing in Supabase)
     let finalRows = resolvedRows;
     if (input.meetingsOverlap) {
-      const target = parseMeetingTime(input.meetingsOverlap);
-      if (target) {
-        finalRows = finalRows.filter((row) => {
-          const m = row.meetings as string | undefined;
-          if (!m) return false;
-          return m.split(",").some((part: string) => {
-            const parsed = parseMeetingTime(part.trim());
-            if (!parsed) return false;
-            return daysOverlap(target.days, parsed.days) && timesOverlap(target, parsed);
-          });
-        });
+      const targets = parseMeetingTimes(input.meetingsOverlap);
+      if (targets.length > 0) {
+        finalRows = finalRows.filter((row) =>
+          parseMeetingTimes(row.meetings as string | undefined).some((block) =>
+            targets.some((target) => blocksOverlap(target, block))
+          )
+        );
       }
     }
 
@@ -405,13 +361,15 @@ async function searchCoursesExecute(input: any) {
       const beforeMin = input.beforeTime ? parseTimeToMin(input.beforeTime) : null;
       const afterMin = input.afterTime ? parseTimeToMin(input.afterTime) : null;
       finalRows = finalRows.filter((row) => {
-        const meetings = row.meetings as string | undefined;
-        if (!meetings) return false;
-        const parsed = parseMeetingTime(meetings);
-        if (!parsed) return false;
-        if (beforeMin !== null && parsed.endMin > beforeMin) return false;
-        if (afterMin !== null && parsed.startMin < afterMin) return false;
-        return true;
+        const blocks = parseMeetingTimes(row.meetings as string | undefined);
+        if (blocks.length === 0) return false;
+        // Every meeting has to fit the window — a course with a 9am lecture and
+        // a 5pm section is not a "before noon" course.
+        return blocks.every((b) => {
+          if (beforeMin !== null && b.endMin > beforeMin) return false;
+          if (afterMin !== null && b.startMin < afterMin) return false;
+          return true;
+        });
       });
     }
 
@@ -419,11 +377,11 @@ async function searchCoursesExecute(input: any) {
     if (input.excludeDays) {
       const excludeExpanded = expandDays(input.excludeDays);
       finalRows = finalRows.filter((row) => {
-        const meetings = row.meetings as string | undefined;
-        const parsed = meetings ? parseMeetingTime(meetings) : null;
-        if (!parsed) return true;
-        const courseDays = expandDays(parsed.days);
-        return !courseDays.some((d: string) => excludeExpanded.includes(d));
+        const blocks = parseMeetingTimes(row.meetings as string | undefined);
+        if (blocks.length === 0) return true;
+        // Check the days of every block, so a Friday section still excludes the
+        // course even when the lecture is MW.
+        return !blocks.some((b) => b.days.some((d) => excludeExpanded.includes(d)));
       });
     }
 
