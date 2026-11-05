@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
-import { getSessionId } from "./schedule-tools";
+import { getSessionId, getScheduleSlot } from "./schedule-tools";
 import { searchProgramsWithCounts, getProgramTagCodes } from "../data";
 
 export const saveRequirements = tool({
@@ -145,7 +145,8 @@ export const checkRequirements = tool({
     const { data: scheduleRows } = await supabase
       .from("schedules")
       .select("offering_name, section_name, term")
-      .eq("session_id", getSessionId());
+      .eq("session_id", getSessionId())
+      .eq("schedule_slot", getScheduleSlot());
 
     const allScheduledCodes = new Set(
       (scheduleRows || []).map((r) => r.offering_name)

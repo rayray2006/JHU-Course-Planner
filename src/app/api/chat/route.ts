@@ -1,20 +1,22 @@
 import { createAgentUIStreamResponse, UIMessage } from "ai";
 import { createCourseAgent } from "@/lib/agents/course-agent";
-import { setSessionId, setActiveTerm } from "@/lib/tools/schedule-tools";
+import { setSessionId, setActiveTerm, setScheduleSlot } from "@/lib/tools/schedule-tools";
 import { checkBudget, recordUsage } from "@/lib/cost-tracker";
 import { resolveSessionId } from "@/lib/session";
 import { termHasSisData } from "@/lib/data";
 import { CURRENT_TERM } from "@/lib/terms";
+import { parseScheduleSlot } from "@/lib/schedule-slots";
 
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
   // Parse first — it needs no network, and activeTerm is the only input the
   // lookups below depend on.
-  const { messages, activeTerm: bodyTerm, selectedPrograms: bodyPrograms }: {
+  const { messages, activeTerm: bodyTerm, selectedPrograms: bodyPrograms, scheduleSlot: bodySlot }: {
     messages: UIMessage[];
     activeTerm?: string;
     selectedPrograms?: string[];
+    scheduleSlot?: number;
   } = await req.json();
 
   const activeTerm = bodyTerm || CURRENT_TERM;
@@ -43,6 +45,9 @@ export async function POST(req: Request) {
 
   setSessionId(sessionId);
   setActiveTerm(activeTerm);
+  // The agent acts only on the schedule the user has open; parseScheduleSlot
+  // inside setScheduleSlot clamps anything unexpected back to Schedule 1.
+  setScheduleSlot(parseScheduleSlot(bodySlot));
 
   const agent = createCourseAgent(activeTerm, hasSisData, selectedPrograms);
 

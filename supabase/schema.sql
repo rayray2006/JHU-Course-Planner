@@ -89,19 +89,28 @@ CREATE TABLE IF NOT EXISTS evaluations (
 CREATE INDEX IF NOT EXISTS idx_eval_course ON evaluations(course_code);
 CREATE INDEX IF NOT EXISTS idx_eval_instructor ON evaluations(instructor);
 
--- User schedules (per-term isolation)
+-- User schedules (per-term isolation, and a few parallel schedules per visitor)
 CREATE TABLE IF NOT EXISTS schedules (
   id SERIAL PRIMARY KEY,
   session_id TEXT NOT NULL,
   offering_name TEXT NOT NULL,
   section_name TEXT NOT NULL,
   term TEXT NOT NULL DEFAULT 'Fall 2026',
+  -- Schedule 1/2/3. Defaulting to 1 is what let this column be added to a
+  -- populated table without moving anybody's existing schedule.
+  schedule_slot SMALLINT NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(session_id, offering_name, section_name, term)
+  -- The slot belongs in the key: without it, adding a class that is already in
+  -- one schedule to another collides and the upsert moves the row instead of
+  -- inserting a second copy.
+  CONSTRAINT schedules_unique_per_slot
+    UNIQUE(session_id, schedule_slot, offering_name, section_name, term),
+  CONSTRAINT schedules_slot_range CHECK (schedule_slot BETWEEN 1 AND 3)
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedules_session ON schedules(session_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_term ON schedules(term);
+CREATE INDEX IF NOT EXISTS idx_schedules_session_slot ON schedules(session_id, schedule_slot, term);
 
 -- Course catalogue (term-independent, from e-catalogue)
 CREATE TABLE IF NOT EXISTS catalogue (

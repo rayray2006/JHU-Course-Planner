@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { isToolUIPart } from "ai";
+import { SCHEDULE_SLOTS, scheduleSlotLabel } from "@/lib/schedule-slots";
 import type { CourseAgentUIMessage } from "@/lib/agents/course-agent";
 import {
   type ScheduledCourse,
@@ -26,8 +27,14 @@ interface SearchResult {
 }
 
 interface MobileLayoutProps {
-  // Term (display only — desktop's term selector is currently inert too)
+  // Term (display only — the planner is pinned to one term)
   activeTerm: string;
+
+  // Which parallel schedule is open, and how to switch it. Owned by the page
+  // so mobile and desktop always act on the same one.
+  activeSlot: number;
+  slotCounts: Record<number, number>;
+  selectSlot: (slot: number) => void;
 
   // Schedule
   schedule: ScheduledCourse[];
@@ -69,7 +76,7 @@ export function MobileLayout(props: MobileLayoutProps) {
 
   return (
     <div className="mobile-screen flex flex-col bg-white text-slate-900 overflow-hidden">
-      <MobileHeader activeTerm={props.activeTerm} />
+      <MobileHeader activeTerm={props.activeTerm} activeSlot={props.activeSlot} slotCounts={props.slotCounts} selectSlot={props.selectSlot} />
 
       <main className="flex-1 min-h-0 overflow-hidden">
         {tab === "schedule" && <ScheduleTab {...props} />}
@@ -85,11 +92,64 @@ export function MobileLayout(props: MobileLayoutProps) {
 // Header
 // ─────────────────────────────────────────────────────────────────────────
 
-function MobileHeader({ activeTerm }: { activeTerm: string }) {
+function MobileHeader({ activeTerm, activeSlot, slotCounts, selectSlot }: {
+  activeTerm: string;
+  activeSlot: number;
+  slotCounts: Record<number, number>;
+  selectSlot: (slot: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
   return (
     <header className="shrink-0 flex items-center justify-between px-4 h-12 border-b border-slate-200 bg-white safe-pt">
       <h1 className="text-[15px] font-semibold tracking-tight text-slate-900">JHU Planner</h1>
-      <span className="text-[12px] font-medium text-slate-500">{activeTerm}</span>
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] font-medium text-slate-500">{activeTerm}</span>
+        <div className="relative" ref={ref}>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            aria-label={`${scheduleSlotLabel(activeSlot)}. Switch schedule`}
+            className="flex items-center gap-1 pl-2.5 pr-2 py-1 rounded-full border border-slate-200 bg-slate-50 text-[12px] font-medium text-slate-600 active:bg-slate-100"
+          >
+            {scheduleSlotLabel(activeSlot)}
+            <svg className={`w-3 h-3 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+          </button>
+          {open && (
+            <div role="listbox" aria-label="Schedules" className="absolute right-0 top-full mt-1 w-44 rounded-md border border-slate-200 bg-white shadow-lg py-1 z-[200]">
+              {SCHEDULE_SLOTS.map((slotNo) => {
+                const n = slotCounts[slotNo] ?? 0;
+                return (
+                  <button
+                    key={slotNo}
+                    type="button"
+                    role="option"
+                    aria-selected={slotNo === activeSlot}
+                    onClick={() => { selectSlot(slotNo); setOpen(false); }}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-[12px] ${slotNo === activeSlot ? "font-semibold text-blue-600" : "text-slate-600"}`}
+                  >
+                    <span>{scheduleSlotLabel(slotNo)}</span>
+                    <span className="shrink-0 text-[11px] text-slate-400">
+                      {n === 0 ? "empty" : `${n} course${n === 1 ? "" : "s"}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </header>
   );
 }
@@ -149,7 +209,7 @@ function BottomTabs({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
 // ─────────────────────────────────────────────────────────────────────────
 
 function ScheduleTab(props: MobileLayoutProps) {
-  const { schedule, scheduleLoaded, totalCredits, selected, setSelected, fetchSchedule, activeTerm } = props;
+  const { schedule, scheduleLoaded, totalCredits, selected, setSelected, fetchSchedule, activeTerm, activeSlot } = props;
   const [searchOpen, setSearchOpen] = useState(false);
 
   // Group courses by day
@@ -186,6 +246,7 @@ function ScheduleTab(props: MobileLayoutProps) {
         offering_name: c.offering_name,
         section_name: c.section_name,
         term: activeTerm,
+        slot: activeSlot,
       }),
     });
     fetchSchedule();
@@ -269,6 +330,7 @@ function ScheduleTab(props: MobileLayoutProps) {
                 offering_name: r.offering_name,
                 section_name: r.section_name,
                 term: activeTerm,
+                slot: activeSlot,
               }),
             });
             fetchSchedule();
@@ -567,6 +629,7 @@ function SearchSheet({
 
 function ChatTab(props: MobileLayoutProps) {
   const {
+    activeSlot,
     messages,
     sendMessage,
     setMessages,
@@ -677,6 +740,7 @@ function ChatTab(props: MobileLayoutProps) {
                                 offering_name: code,
                                 section_name: section,
                                 term: activeTerm,
+                                slot: activeSlot,
                               }),
                             });
                             fetchSchedule();

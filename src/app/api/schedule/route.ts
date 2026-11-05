@@ -2,49 +2,62 @@ import { supabase } from "@/lib/supabase";
 import { NextResponse, NextRequest } from "next/server";
 import { CURRENT_TERM } from "@/lib/terms";
 import { resolveSessionId } from "@/lib/session";
+import { SCHEDULE_SLOTS, parseScheduleSlot } from "@/lib/schedule-slots";
+
+const COURSE_COLS =
+  "offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level";
 
 export async function GET(req: NextRequest) {
   const sessionId = await resolveSessionId();
   const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
+  const slot = parseScheduleSlot(req.nextUrl.searchParams.get("slot"));
 
-  // Get scheduled course keys for this term
-  const { data: scheduleRows } = await supabase
+  // Read every slot in one go and split locally. The counts drive the schedule
+  // picker, and a second query to total them would cost another round trip —
+  // round trips are the expense against Supabase, not rows.
+  const { data: allRows } = await supabase
     .from("schedules")
-    .select("offering_name, section_name")
+    .select("offering_name, section_name, schedule_slot")
     .eq("session_id", sessionId)
     .eq("term", term);
 
-  if (!scheduleRows || scheduleRows.length === 0) {
-    return NextResponse.json([]);
+  const counts: Record<number, number> = Object.fromEntries(SCHEDULE_SLOTS.map((s) => [s, 0]));
+  for (const row of allRows ?? []) {
+    counts[row.schedule_slot] = (counts[row.schedule_slot] ?? 0) + 1;
+  }
+
+  const scheduleRows = (allRows ?? []).filter((r) => r.schedule_slot === slot);
+  if (scheduleRows.length === 0) {
+    return NextResponse.json({ courses: [], counts });
   }
 
   // PLAN/TAKEN entries are no longer created: the planner is pinned to a
   // single term, so there is no past-term "courses taken" flow and no
   // section-less plan rows. Older rows of that shape simply do not render.
-  const results: Record<string, unknown>[] = [];
-
   const orFilter = scheduleRows
     .map((r) => `and(offering_name.eq.${r.offering_name},section_name.eq.${r.section_name})`)
     .join(",");
 
   const { data: courses } = await supabase
     .from("courses")
-    .select("offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level")
+    .select(COURSE_COLS)
     .eq("term", term)
     .or(orFilter);
 
-  if (courses) results.push(...courses);
-
-  return NextResponse.json(results);
+  return NextResponse.json({ courses: courses ?? [], counts });
 }
 
 export async function POST(req: NextRequest) {
   const sessionId = await resolveSessionId();
-  const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
+  const { offering_name, section_name, term = CURRENT_TERM, slot } = await req.json();
+  const scheduleSlot = parseScheduleSlot(slot);
 
+  // The conflict target must name the slot. Without it this upsert matches the
+  // copy already sitting in another schedule and updates that row, moving the
+  // class between schedules rather than adding it to this one.
   const { error } = await supabase.from("schedules").upsert(
-    { session_id: sessionId, offering_name, section_name, term },
-    { onConflict: "session_id,offering_name,section_name,term" }
+    { session_id: sessionId, schedule_slot: scheduleSlot, offering_name, section_name, term },
+    { onConflict: "session_id,schedule_slot,offering_name,section_name,term" }
   );
 
   // resolveSessionId has already issued the cookie if this caller arrived
@@ -54,12 +67,14 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const sessionId = await resolveSessionId();
-  const { offering_name, section_name, term = CURRENT_TERM } = await req.json();
+  const { offering_name, section_name, term = CURRENT_TERM, slot } = await req.json();
+  const scheduleSlot = parseScheduleSlot(slot);
 
   let query = supabase
     .from("schedules")
     .delete()
     .eq("session_id", sessionId)
+    .eq("schedule_slot", scheduleSlot)
     .eq("offering_name", offering_name)
     .eq("term", term);
 

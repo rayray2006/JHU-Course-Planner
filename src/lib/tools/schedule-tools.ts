@@ -2,11 +2,20 @@ import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
 import { CURRENT_TERM } from "../terms";
+import { DEFAULT_SCHEDULE_SLOT, parseScheduleSlot } from "../schedule-slots";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
 export function setSessionId(id: string) { _sessionId = id; }
 export function getSessionId() { return _sessionId; }
+
+// Which of the visitor's parallel schedules the chat is acting on. Set per
+// request from the body, the same way the term is. Every read and write below
+// filters on it, so the agent can only ever see or touch the schedule the user
+// currently has open.
+let _scheduleSlot = DEFAULT_SCHEDULE_SLOT;
+export function setScheduleSlot(slot: number) { _scheduleSlot = parseScheduleSlot(slot); }
+export function getScheduleSlot() { return _scheduleSlot; }
 
 // Active term for this request
 let _activeTerm = CURRENT_TERM;
@@ -83,8 +92,8 @@ export const addCourseToSchedule = tool({
     if (!course) return { success: false, message: `Course ${offering_name} section ${section_name} not found in ${_activeTerm}.` };
 
     const { error } = await supabase.from("schedules").upsert(
-      { session_id: _sessionId, offering_name, section_name, term: _activeTerm },
-      { onConflict: "session_id,offering_name,section_name,term" }
+      { session_id: _sessionId, schedule_slot: _scheduleSlot, offering_name, section_name, term: _activeTerm },
+      { onConflict: "session_id,schedule_slot,offering_name,section_name,term" }
     );
 
     if (error) return { success: false, message: error.message };
@@ -99,10 +108,14 @@ export const removeCourseFromSchedule = tool({
     section_name: z.string().describe("Section number"),
   }),
   execute: async ({ offering_name, section_name }) => {
+    // count only comes back when it is asked for; without it this was always
+    // null and the "not in your schedule" branch below could never fire, so a
+    // removal that matched nothing still reported success.
     const { count } = await supabase
       .from("schedules")
-      .delete()
+      .delete({ count: "exact" })
       .eq("session_id", _sessionId)
+      .eq("schedule_slot", _scheduleSlot)
       .eq("offering_name", offering_name)
       .eq("section_name", section_name)
       .eq("term", _activeTerm);
@@ -120,6 +133,7 @@ export const viewSchedule = tool({
       .from("schedules")
       .select("offering_name, section_name")
       .eq("session_id", _sessionId)
+      .eq("schedule_slot", _scheduleSlot)
       .eq("term", _activeTerm);
 
     if (!scheduleRows || scheduleRows.length === 0) return { courses: [], message: `Your ${_activeTerm} schedule is empty.` };
@@ -147,7 +161,7 @@ export const clearMySchedule = tool({
   description: "Clear all courses from the user's schedule for the current semester. Ask for confirmation first.",
   inputSchema: z.object({}),
   execute: async () => {
-    await supabase.from("schedules").delete().eq("session_id", _sessionId).eq("term", _activeTerm);
+    await supabase.from("schedules").delete().eq("session_id", _sessionId).eq("schedule_slot", _scheduleSlot).eq("term", _activeTerm);
     return { success: true, message: `${_activeTerm} schedule cleared.` };
   },
 });
@@ -204,6 +218,7 @@ async function findNonConflictingExecute(input: any) {
       .from("schedules")
       .select("offering_name, section_name")
       .eq("session_id", _sessionId)
+      .eq("schedule_slot", _scheduleSlot)
       .eq("term", _activeTerm);
 
     const scheduleEmpty = !scheduleRows || scheduleRows.length === 0;

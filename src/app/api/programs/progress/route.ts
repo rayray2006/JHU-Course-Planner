@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase";
 import { getProgramSchema, getPosTags } from "@/lib/data";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSessionId } from "@/lib/session";
+import { parseScheduleSlot } from "@/lib/schedule-slots";
 
 interface ScheduledCourse {
   offering_name: string;
@@ -313,12 +314,14 @@ export async function GET(req: NextRequest) {
   const otherIsGrad = otherPrograms.some((p) => /Master|PhD|Doctoral|MSE|MS\b/i.test(p));
 
   const sessionId = await resolveSessionId();
+  const scheduleSlot = parseScheduleSlot(req.nextUrl.searchParams.get("slot"));
 
   // Fetch ALL scheduled courses across all terms
   const { data: scheduleRows } = await supabase
     .from("schedules")
     .select("offering_name, term")
-    .eq("session_id", sessionId);
+    .eq("session_id", sessionId)
+    .eq("schedule_slot", scheduleSlot);
 
   const scheduled: ScheduledCourse[] = [];
   if (scheduleRows && scheduleRows.length > 0) {

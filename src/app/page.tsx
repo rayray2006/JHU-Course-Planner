@@ -8,6 +8,7 @@ import type { CourseAgentUIMessage } from "@/lib/agents/course-agent";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { MobileLayout } from "@/components/MobileLayout";
 import { CURRENT_TERM } from "@/lib/terms";
+import { SCHEDULE_SLOTS, DEFAULT_SCHEDULE_SLOT, parseScheduleSlot, scheduleSlotLabel } from "@/lib/schedule-slots";
 
 
 interface ScheduledCourse {
@@ -287,13 +288,40 @@ export default function Home() {
   });
 
 
+  // Which of the parallel schedules is open. Remembered per browser so a
+  // reload does not drop someone back into Schedule 1 mid-comparison;
+  // parseScheduleSlot turns anything stale or hand-edited back into 1.
+  const [activeSlot, setActiveSlot] = useState<number>(DEFAULT_SCHEDULE_SLOT);
+  const [slotCounts, setSlotCounts] = useState<Record<number, number>>({});
+  const [slotOpen, setSlotOpen] = useState(false);
+  const slotRef = useRef<HTMLDivElement>(null);
+
+  // Read after mount rather than in the initial state: the server renders with
+  // Schedule 1, and reading localStorage during render makes the first client
+  // render disagree with it.
+  useEffect(() => {
+    setActiveSlot(parseScheduleSlot(localStorage.getItem("jhu_scheduleSlot")));
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("jhu_scheduleSlot", String(activeSlot));
+  }, [activeSlot]);
+
+  useEffect(() => {
+    if (!slotOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (slotRef.current && !slotRef.current.contains(e.target as Node)) setSlotOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [slotOpen]);
+
   const chatTransport = useMemo(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: { activeTerm, selectedPrograms },
+        body: { activeTerm, selectedPrograms, scheduleSlot: activeSlot },
       }),
-    [activeTerm, selectedPrograms]
+    [activeTerm, selectedPrograms, activeSlot]
   );
 
   const { messages, sendMessage, setMessages, status, error } = useChat<CourseAgentUIMessage>({
@@ -310,6 +338,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [schedule, setSchedule] = useState<ScheduledCourse[]>([]);
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
+
   const [selected, setSelected] = useState<ScheduledCourse | null>(null);
   const [previewCourse, setPreviewCourse] = useState<ScheduledCourse | null>(null);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -586,13 +615,28 @@ export default function Home() {
   const scheduleFetchId = useRef(0);
   const fetchSchedule = useCallback(async () => {
     const id = ++scheduleFetchId.current;
-    const res = await fetch(`/api/schedule?term=${encodeURIComponent(activeTerm)}`);
+    const res = await fetch(`/api/schedule?term=${encodeURIComponent(activeTerm)}&slot=${activeSlot}`);
     if (res.ok && scheduleFetchId.current === id) {
-      // Only apply if this is still the latest fetch (prevents race conditions on term switch)
-      setSchedule(await res.json());
+      // Only apply if this is still the latest fetch. This already guarded
+      // term switches; it now also covers clicking through the schedules
+      // faster than the responses come back.
+      const data = await res.json();
+      setSchedule(data.courses ?? []);
+      setSlotCounts(data.counts ?? {});
       setScheduleLoaded(true);
     }
-  }, [activeTerm]);
+  }, [activeTerm, activeSlot]);
+
+  // Search results and the open detail panel belong to the schedule they were
+  // opened from, so drop them. The grid refetches on its own: fetchSchedule is
+  // keyed to activeSlot.
+  const selectSlot = useCallback((slot: number) => {
+    setActiveSlot(slot);
+    setSlotOpen(false);
+    setSelected(null);
+    setPreviewCourse(null);
+    setExpandedSearchCourse(null);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -726,6 +770,9 @@ export default function Home() {
     return (
       <MobileLayout
         activeTerm={activeTerm}
+        activeSlot={activeSlot}
+        slotCounts={slotCounts}
+        selectSlot={selectSlot}
         schedule={schedule}
         scheduleLoaded={scheduleLoaded}
         totalCredits={totalCredits}
@@ -756,10 +803,47 @@ export default function Home() {
       <main className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <div className="flex items-center gap-3 px-4 h-12 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0 relative z-[100]">
-          {/* Title + Term */}
+          {/* Title + Term + Schedule picker */}
           <div className="flex items-center gap-2 shrink-0">
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight">JHU Planner</h1>
             <span className="text-[11px] font-medium text-slate-500">{activeTerm}</span>
+            <div className="relative" ref={slotRef}>
+              {/* Given a chip rather than the term's plain text so it reads as
+                  something you can click, next to something you cannot. */}
+              <button
+                type="button"
+                onClick={() => setSlotOpen((o) => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={slotOpen}
+                aria-label={`${scheduleSlotLabel(activeSlot)}. Switch schedule`}
+                className="flex items-center gap-1 pl-2 pr-1.5 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-[11px] font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+              >
+                {scheduleSlotLabel(activeSlot)}
+                <svg className={`w-3 h-3 text-slate-400 transition-transform ${slotOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+              </button>
+              {slotOpen && (
+                <div role="listbox" aria-label="Schedules" className="absolute left-0 top-full mt-1 w-48 rounded-md border border-slate-200 bg-white shadow-lg py-1 z-[200]">
+                  {SCHEDULE_SLOTS.map((slotNo) => {
+                    const n = slotCounts[slotNo] ?? 0;
+                    return (
+                      <button
+                        key={slotNo}
+                        type="button"
+                        role="option"
+                        aria-selected={slotNo === activeSlot}
+                        onClick={() => selectSlot(slotNo)}
+                        className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-slate-50 transition-colors ${slotNo === activeSlot ? "font-semibold text-blue-600" : "text-slate-600"}`}
+                      >
+                        <span className="truncate">{scheduleSlotLabel(slotNo)}</span>
+                        <span className="shrink-0 text-[10px] text-slate-400">
+                          {n === 0 ? "empty" : `${n} course${n === 1 ? "" : "s"}`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Search bar */}
@@ -806,7 +890,7 @@ export default function Home() {
                       await fetch("/api/schedule", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ offering_name: r.offering_name, section_name: sectionName, term: activeTerm }),
+                        body: JSON.stringify({ offering_name: r.offering_name, section_name: sectionName, term: activeTerm, slot: activeSlot }),
                       });
                       fetchSchedule();
                       clearPreview();
@@ -1229,7 +1313,7 @@ export default function Home() {
                                         await fetch("/api/schedule", {
                                           method: "DELETE",
                                           headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ offering_name: m.code, term: m.term || activeTerm }),
+                                          body: JSON.stringify({ offering_name: m.code, term: m.term || activeTerm, slot: activeSlot }),
                                         });
                                         fetchSchedule();
                                       }}
@@ -1410,7 +1494,7 @@ export default function Home() {
                           await fetch("/api/schedule", {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ offering_name: block.course.offering_name, section_name: block.course.section_name, term: activeTerm }),
+                            body: JSON.stringify({ offering_name: block.course.offering_name, section_name: block.course.section_name, term: activeTerm, slot: activeSlot }),
                           });
                           fetchSchedule();
                           if (selected?.offering_name === block.course.offering_name && selected?.section_name === block.course.section_name) {
@@ -1464,7 +1548,7 @@ export default function Home() {
                           await fetch("/api/schedule", {
                             method: "DELETE",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ offering_name: c.offering_name, section_name: c.section_name, term: activeTerm }),
+                            body: JSON.stringify({ offering_name: c.offering_name, section_name: c.section_name, term: activeTerm, slot: activeSlot }),
                           });
                           fetchSchedule();
                         }}
@@ -1505,7 +1589,7 @@ export default function Home() {
                         await fetch("/api/schedule", {
                           method: "DELETE",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ offering_name: selected.offering_name, section_name: selected.section_name, term: activeTerm }),
+                          body: JSON.stringify({ offering_name: selected.offering_name, section_name: selected.section_name, term: activeTerm, slot: activeSlot }),
                         });
                         setSelected(null); setProfRatings(null); setCourseDetail(null);
                         fetchSchedule();
@@ -1863,7 +1947,7 @@ export default function Home() {
                             await fetch("/api/schedule", {
                               method: "POST",
                               headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ offering_name: code, section_name: section, term: activeTerm }),
+                              body: JSON.stringify({ offering_name: code, section_name: section, term: activeTerm, slot: activeSlot }),
                             });
                             fetchSchedule();
                             clearPreview();

@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
-import { getSessionId, getActiveTerm } from "./schedule-tools";
+import { getSessionId, getActiveTerm, getScheduleSlot } from "./schedule-tools";
 import { getPosTags, getVisiblePrograms } from "../data";
 
 interface ProgressCourse {
@@ -28,11 +28,12 @@ function getCourseLevel(code: string): number {
   return parseInt(parts[parts.length - 1]) || 0;
 }
 
-async function getScheduledCourses(sessionId: string) {
+async function getScheduledCourses(sessionId: string, scheduleSlot: number) {
   const { data: scheduleRows } = await supabase
     .from("schedules")
     .select("offering_name, term")
-    .eq("session_id", sessionId);
+    .eq("session_id", sessionId)
+    .eq("schedule_slot", scheduleSlot);
 
   if (!scheduleRows || scheduleRows.length === 0) return [];
 
@@ -75,7 +76,7 @@ export const checkDegreeProgress = tool({
 
     for (const prog of programs) {
       try {
-        const url = `http://localhost:${process.env.PORT || 3000}/api/programs/progress?name=${encodeURIComponent(prog)}`;
+        const url = `http://localhost:${process.env.PORT || 3000}/api/programs/progress?name=${encodeURIComponent(prog)}&slot=${getScheduleSlot()}`;
         const res = await fetch(url, {
           headers: { Cookie: `schedule_session=${getSessionId()}` },
         });
