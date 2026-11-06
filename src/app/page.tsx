@@ -10,6 +10,7 @@ import { MobileLayout } from "@/components/MobileLayout";
 import { CURRENT_TERM } from "@/lib/terms";
 import { SCHEDULE_SLOTS, DEFAULT_SCHEDULE_SLOT, parseScheduleSlot, scheduleSlotLabel } from "@/lib/schedule-slots";
 import { parseMeetings } from "@/lib/schedule-utils";
+import { layoutWeek } from "@/lib/calendar-layout";
 
 
 interface ScheduledCourse {
@@ -29,6 +30,18 @@ interface ScheduledCourse {
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8);
 const ROW_H = 52; // px per hour row
+
+/** Turn a block's pixel geometry back into "10:30 – 11:45" for the grid's labels. */
+function formatSlotTime(top: number, height: number): string {
+  const clock = (px: number) => {
+    const mins = Math.round((px / ROW_H) * 60) + 8 * 60;
+    const h24 = Math.floor(mins / 60);
+    const m = mins % 60;
+    const h = h24 % 12 === 0 ? 12 : h24 % 12;
+    return `${h}:${String(m).padStart(2, "0")}${h24 >= 12 ? "pm" : "am"}`;
+  };
+  return `${clock(top)} – ${clock(top + height)}`;
+}
 
 // --- Color palette (softer, more distinct) ---
 const PALETTE = [
@@ -271,6 +284,26 @@ export default function Home() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [slotOpen]);
+
+  // Which "+N more" tile is expanded, as "<dayIdx>-<top>". Only one at a time.
+  const [openCrowded, setOpenCrowded] = useState<string | null>(null);
+  const crowdedRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!openCrowded) return;
+    function handleClick(e: MouseEvent) {
+      if (crowdedRef.current && !crowdedRef.current.contains(e.target as Node)) setOpenCrowded(null);
+    }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenCrowded(null);
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [openCrowded]);
 
   const chatTransport = useMemo(
     () =>
@@ -684,6 +717,26 @@ export default function Home() {
     []
   );
 
+  const removeCourse = useCallback(
+    async (c: ScheduledCourse) => {
+      await fetch("/api/schedule", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offering_name: c.offering_name,
+          section_name: c.section_name,
+          term: activeTerm,
+          slot: activeSlot,
+        }),
+      });
+      fetchSchedule();
+      setSelected((prev) =>
+        prev?.offering_name === c.offering_name && prev?.section_name === c.section_name ? null : prev
+      );
+    },
+    [activeTerm, activeSlot, fetchSchedule]
+  );
+
   // Department-based color for search results
   const deptColor = useCallback((dept: string | undefined) => {
     if (!dept) return PALETTE[0];
@@ -722,6 +775,10 @@ export default function Home() {
   };
   schedule.forEach((c) => addBlocks(c));
   if (previewCourse) addBlocks(previewCourse, true);
+
+  const blockKey = (b: { course: ScheduledCourse; isPreview?: boolean }) =>
+    `${b.isPreview ? "~" : ""}${b.course.offering_name}::${b.course.section_name}`;
+  const { placed: placedBlocks, overflow: crowdedSlots } = layoutWeek(blocks, blockKey);
 
   if (isMobile) {
     return (
@@ -1386,20 +1443,7 @@ export default function Home() {
                 ))}
 
                 {/* Course blocks */}
-                {blocks.map((block) => {
-                  const siblings = blocks.filter(
-                    (b) =>
-                      b.dayIdx === block.dayIdx &&
-                      b.top < block.top + block.height &&
-                      b.top + b.height > block.top
-                  );
-                  siblings.sort((a, b) => {
-                    const ka = `${a.course.offering_name}::${a.course.section_name}`;
-                    const kb = `${b.course.offering_name}::${b.course.section_name}`;
-                    return ka.localeCompare(kb);
-                  });
-                  const idx = siblings.indexOf(block);
-                  const total = siblings.length;
+                {placedBlocks.map(({ block, lane: idx, lanes: total }) => {
                   const pal = colorOf(block.course);
 
                   if (block.isPreview) {
@@ -1446,17 +1490,9 @@ export default function Home() {
                       onClick={() => setSelected(block.course)}
                     >
                       <button
-                        onClick={async (e) => {
+                        onClick={(e) => {
                           e.stopPropagation();
-                          await fetch("/api/schedule", {
-                            method: "DELETE",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ offering_name: block.course.offering_name, section_name: block.course.section_name, term: activeTerm, slot: activeSlot }),
-                          });
-                          fetchSchedule();
-                          if (selected?.offering_name === block.course.offering_name && selected?.section_name === block.course.section_name) {
-                            setSelected(null);
-                          }
+                          removeCourse(block.course);
                         }}
                         className="absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-black/10 transition-all"
                         title="Remove"
@@ -1474,6 +1510,95 @@ export default function Home() {
                           Click for info
                         </span>
                       </div>
+                    </div>
+                  );
+                })}
+
+                {/* Crowded slots: past three columns a block is too narrow to
+                    read, so the tail of the stack collapses into one tile. */}
+                {crowdedSlots.map((slot) => {
+                  const id = `${slot.dayIdx}-${slot.top}`;
+                  const isOpen = openCrowded === id;
+                  // Flip the panel when the tile sits low in the grid, or when
+                  // it is on Thu/Fri, so it stays inside the visible area.
+                  const dropUp = slot.top > (HOURS.length * ROW_H) / 2;
+                  const alignRight = slot.dayIdx >= 3;
+                  return (
+                    <div
+                      key={`crowded-${id}`}
+                      ref={isOpen ? crowdedRef : undefined}
+                      className="absolute"
+                      style={{
+                        top: slot.top,
+                        height: slot.height,
+                        left: `calc(52px + ${slot.dayIdx} * ((100% - 52px) / 5) + 3px + ${slot.lane} * ((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
+                        width: `calc(((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
+                        zIndex: isOpen ? 40 : 16,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setOpenCrowded(isOpen ? null : id)}
+                        aria-expanded={isOpen}
+                        aria-label={`${slot.hidden.length} more courses at this time`}
+                        className={`w-full h-full rounded-lg border border-dashed flex flex-col items-center justify-center gap-0.5 transition-colors ${
+                          isOpen
+                            ? "border-slate-400 bg-slate-100 text-slate-700"
+                            : "border-slate-300 bg-slate-50 text-slate-500 hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                        }`}
+                      >
+                        <span className="text-[11px] font-bold leading-none">+{slot.hidden.length}</span>
+                        <span className="text-[9px] leading-none opacity-70">more</span>
+                      </button>
+
+                      {isOpen && (
+                        <div
+                          className={`absolute w-56 max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1 ${
+                            dropUp ? "bottom-full mb-1" : "top-full mt-1"
+                          } ${alignRight ? "right-0" : "left-0"}`}
+                        >
+                          <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                            {DAYS_SHORT[slot.dayIdx]} {formatSlotTime(slot.top, slot.height)}
+                          </div>
+                          {slot.hidden.map(({ course }) => {
+                            const pal = colorOf(course);
+                            return (
+                              <div
+                                key={`${course.offering_name}-${course.section_name}`}
+                                className="group/more flex items-start gap-2 px-2.5 py-1.5 hover:bg-slate-50 transition-colors"
+                              >
+                                <span
+                                  className="mt-[3px] w-2 h-2 rounded-full shrink-0"
+                                  style={{ background: pal.border }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelected(course);
+                                    setOpenCrowded(null);
+                                  }}
+                                  className="flex-1 min-w-0 text-left"
+                                >
+                                  <span className="block text-[11px] font-semibold text-slate-700 truncate">
+                                    {course.offering_name}
+                                  </span>
+                                  <span className="block text-[10px] text-slate-500 truncate">
+                                    {course.title}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeCourse(course)}
+                                  className="shrink-0 text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover/more:opacity-100 transition-opacity"
+                                  title="Remove"
+                                >
+                                  &#10005;
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
