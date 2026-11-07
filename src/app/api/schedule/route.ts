@@ -14,21 +14,39 @@ export async function GET(req: NextRequest) {
 
   // Read every slot in one go and split locally. The counts drive the schedule
   // picker, and a second query to total them would cost another round trip —
-  // round trips are the expense against Supabase, not rows.
-  const { data: allRows } = await supabase
-    .from("schedules")
-    .select("offering_name, section_name, schedule_slot")
-    .eq("session_id", sessionId)
-    .eq("term", term);
+  // round trips are the expense against Supabase, not rows. The two tables go
+  // out together for the same reason.
+  const [{ data: allRows }, { data: allActivities }] = await Promise.all([
+    supabase
+      .from("schedules")
+      .select("offering_name, section_name, schedule_slot")
+      .eq("session_id", sessionId)
+      .eq("term", term),
+    supabase
+      .from("activities")
+      .select("id, name, days, start_min, end_min, schedule_slot")
+      .eq("session_id", sessionId)
+      .eq("term", term)
+      .order("start_min"),
+  ]);
 
   const counts: Record<number, number> = Object.fromEntries(SCHEDULE_SLOTS.map((s) => [s, 0]));
   for (const row of allRows ?? []) {
     counts[row.schedule_slot] = (counts[row.schedule_slot] ?? 0) + 1;
   }
+  // Activities count toward "what's in this schedule" too, or a slot holding
+  // nothing but a club meeting would read as empty in the picker.
+  for (const row of allActivities ?? []) {
+    counts[row.schedule_slot] = (counts[row.schedule_slot] ?? 0) + 1;
+  }
+
+  const activities = (allActivities ?? [])
+    .filter((a) => a.schedule_slot === slot)
+    .map(({ schedule_slot: _slot, ...a }) => a);
 
   const scheduleRows = (allRows ?? []).filter((r) => r.schedule_slot === slot);
   if (scheduleRows.length === 0) {
-    return NextResponse.json({ courses: [], counts });
+    return NextResponse.json({ courses: [], activities, counts });
   }
 
   // PLAN/TAKEN entries are no longer created: the planner is pinned to a
@@ -44,7 +62,7 @@ export async function GET(req: NextRequest) {
     .eq("term", term)
     .or(orFilter);
 
-  return NextResponse.json({ courses: courses ?? [], counts });
+  return NextResponse.json({ courses: courses ?? [], activities, counts });
 }
 
 export async function POST(req: NextRequest) {

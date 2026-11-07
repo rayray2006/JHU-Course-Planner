@@ -11,6 +11,16 @@ import { CURRENT_TERM } from "@/lib/terms";
 import { SCHEDULE_SLOTS, DEFAULT_SCHEDULE_SLOT, parseScheduleSlot, scheduleSlotLabel } from "@/lib/schedule-slots";
 import { parseMeetings } from "@/lib/schedule-utils";
 import { layoutWeek } from "@/lib/calendar-layout";
+import { ActivityEditor, type ActivityDraftState } from "@/components/ActivityEditor";
+import {
+  GRID_END_MIN,
+  GRID_START_MIN,
+  MIN_DURATION_MIN,
+  activityMeetings,
+  minutesToLabel,
+  snap,
+  type Activity,
+} from "@/lib/activities";
 
 
 interface ScheduledCourse {
@@ -327,7 +337,18 @@ export default function Home() {
   }, [status, messages]);
   const [input, setInput] = useState("");
   const [schedule, setSchedule] = useState<ScheduledCourse[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [scheduleLoaded, setScheduleLoaded] = useState(false);
+
+  // The activity editor: a draft plus where on the grid to hang the card.
+  const [activityDraft, setActivityDraft] = useState<
+    (ActivityDraftState & { dayIdx: number; top: number }) | null
+  >(null);
+  const [savingActivity, setSavingActivity] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  // While the pointer is down on empty grid, the region being swept out.
+  const [drag, setDrag] = useState<{ dayIdx: number; fromMin: number; toMin: number } | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const [selected, setSelected] = useState<ScheduledCourse | null>(null);
   const [previewCourse, setPreviewCourse] = useState<ScheduledCourse | null>(null);
@@ -583,6 +604,19 @@ export default function Home() {
     } | null;
   }
   const [profRatings, setProfRatings] = useState<ProfRatingResult[] | "loading" | null>(null);
+  interface CourseSection {
+    section_name: string;
+    meetings: string | null;
+    instructors_full_name: string | null;
+    status: string | null;
+    open_seats: number | null;
+    max_seats: number | null;
+    waitlisted: number | null;
+    location: string | null;
+    building: string | null;
+    instruction_method: string | null;
+  }
+
   interface CourseDetail {
     description: string | null;
     prerequisites: string | null;
@@ -597,6 +631,7 @@ export default function Home() {
     num_respondents: number | null;
     pos_tags?: string[];
     areas?: string | null;
+    sections?: CourseSection[];
   }
   const [courseDetail, setCourseDetail] = useState<CourseDetail | "loading" | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -612,6 +647,7 @@ export default function Home() {
       // faster than the responses come back.
       const data = await res.json();
       setSchedule(data.courses ?? []);
+      setActivities(data.activities ?? []);
       setSlotCounts(data.counts ?? {});
       setScheduleLoaded(true);
     }
@@ -626,6 +662,8 @@ export default function Home() {
     setSelected(null);
     setPreviewCourse(null);
     setExpandedSearchCourse(null);
+    setActivityDraft(null);
+    setDrag(null);
   }, []);
 
   useEffect(() => {
@@ -666,16 +704,26 @@ export default function Home() {
   // Fetch professor ratings and course detail when a course is selected.
   // Keep old data visible until new data is ready (no flash).
   const [panelReady, setPanelReady] = useState(false);
+  const loadedOffering = useRef<string | null>(null);
+  const [switchingSection, setSwitchingSection] = useState<string | null>(null);
   useEffect(() => {
     if (!selected) {
       setProfRatings(null);
       setCourseDetail(null);
       setPanelReady(false);
+      loadedOffering.current = null;
       return;
     }
 
     let cancelled = false;
-    setPanelReady(false);
+    // Switching to another section of the same course keeps the panel up:
+    // tearing it down and rebuilding it makes the card jump out from under
+    // the click that asked for the switch. A different course still blanks it,
+    // because then everything on screen is about to be wrong.
+    if (loadedOffering.current !== selected.offering_name) {
+      setPanelReady(false);
+      loadedOffering.current = selected.offering_name;
+    }
 
     const profPromise: Promise<ProfRatingResult[]> = (() => {
       const name = selected.instructors_full_name;
@@ -737,6 +785,60 @@ export default function Home() {
     [activeTerm, activeSlot, fetchSchedule]
   );
 
+  /**
+   * Move the schedule from one section of a course to another.
+   *
+   * Adds before removing: the two rows differ by section so they can coexist
+   * for a moment, and if the add fails the user still has the section they
+   * started with. The other order would drop them out of the course entirely
+   * whenever the second call failed.
+   */
+  const switchSection = useCallback(
+    async (sec: CourseSection) => {
+      if (!selected || sec.section_name === selected.section_name) return;
+      setSwitchingSection(sec.section_name);
+      try {
+        const add = await fetch("/api/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            offering_name: selected.offering_name,
+            section_name: sec.section_name,
+            term: activeTerm,
+            slot: activeSlot,
+          }),
+        }).then((r) => r.json());
+
+        if (!add?.success) return;
+
+        await fetch("/api/schedule", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            offering_name: selected.offering_name,
+            section_name: selected.section_name,
+            term: activeTerm,
+            slot: activeSlot,
+          }),
+        });
+
+        setSelected({
+          ...selected,
+          section_name: sec.section_name,
+          meetings: sec.meetings ?? "",
+          instructors_full_name: sec.instructors_full_name ?? "",
+          location: sec.location ?? "",
+          building: sec.building ?? "",
+          instruction_method: sec.instruction_method ?? "",
+        });
+        fetchSchedule();
+      } finally {
+        setSwitchingSection(null);
+      }
+    },
+    [selected, activeTerm, activeSlot, fetchSchedule]
+  );
+
   // Department-based color for search results
   const deptColor = useCallback((dept: string | undefined) => {
     if (!dept) return PALETTE[0];
@@ -757,6 +859,8 @@ export default function Home() {
     top: number;
     height: number;
     isPreview?: boolean;
+    /** Set when this block is a custom time block rather than a course. */
+    activity?: Activity;
   }[] = [];
   const addBlocks = (course: ScheduledCourse, isPreview = false) => {
     const mbs = parseMeetings(course.meetings);
@@ -774,7 +878,144 @@ export default function Home() {
     });
   };
   schedule.forEach((c) => addBlocks(c));
+
+  // An activity rides through the calendar as an ordinary scheduled entry:
+  // given a SIS-shaped meetings string it reuses the same parser, column
+  // layout and crowded-slot handling as a course, and only the rendering
+  // branch below has to know the difference.
+  activities.forEach((a) => {
+    const asCourse: ScheduledCourse = {
+      offering_name: a.name,
+      section_name: `activity-${a.id}`,
+      title: "",
+      credits: "0",
+      meetings: activityMeetings(a),
+      location: "",
+      building: "",
+      instructors_full_name: "",
+      instruction_method: "",
+      department: "",
+    };
+    const before = blocks.length;
+    addBlocks(asCourse);
+    for (let i = before; i < blocks.length; i++) blocks[i].activity = a;
+  });
+
   if (previewCourse) addBlocks(previewCourse, true);
+
+  // --- Drag on empty grid to carve out a new time block ---
+
+  const DAY_CODES = ["M", "T", "W", "Th", "F"];
+
+  /** Where in the week a pointer is, or null when it is over the hour gutter. */
+  const pointToSlot = (clientX: number, clientY: number) => {
+    const rect = gridRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = clientX - rect.left;
+    if (x < 52) return null;
+    const colW = (rect.width - 52) / 5;
+    const dayIdx = Math.min(4, Math.max(0, Math.floor((x - 52) / colW)));
+    const y = Math.min(HOURS.length * ROW_H, Math.max(0, clientY - rect.top));
+    return { dayIdx, min: GRID_START_MIN + (y / ROW_H) * 60 };
+  };
+
+  const startDrag = (e: React.MouseEvent) => {
+    // Left button only, and never when the press lands on something that
+    // already owns the click: a course block, the "+N more" tile, the editor.
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("[data-course-block],[data-grid-overlay]")) return;
+    const at = pointToSlot(e.clientX, e.clientY);
+    if (!at) return;
+    setActivityDraft(null);
+    setDrag({ dayIdx: at.dayIdx, fromMin: at.min, toMin: at.min });
+  };
+
+  useEffect(() => {
+    if (!drag) return;
+
+    const move = (e: MouseEvent) => {
+      const at = pointToSlot(e.clientX, e.clientY);
+      if (!at) return;
+      // The day is fixed at mousedown: dragging sideways changes the time, not
+      // which column the block lands in.
+      setDrag((d) => (d ? { ...d, toMin: at.min } : d));
+    };
+
+    const up = () => {
+      setDrag((d) => {
+        if (d) {
+          const lo = snap(Math.min(d.fromMin, d.toMin));
+          const hi = snap(Math.max(d.fromMin, d.toMin));
+          // Ignore a stray click: only a real sweep creates a block.
+          if (hi - lo >= MIN_DURATION_MIN) {
+            const start = Math.max(GRID_START_MIN, lo);
+            const end = Math.min(GRID_END_MIN, Math.max(start + MIN_DURATION_MIN, hi));
+            setActivityDraft({
+              name: "",
+              days: DAY_CODES[d.dayIdx],
+              start_min: start,
+              end_min: end,
+              dayIdx: d.dayIdx,
+              top: ((start - GRID_START_MIN) / 60) * ROW_H,
+            });
+          }
+        }
+        return null;
+      });
+    };
+
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    // pointToSlot reads a ref, so it needs no dependency of its own.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drag !== null]);
+
+  const saveActivity = useCallback(
+    async (value: ActivityDraftState) => {
+      setSavingActivity(true);
+      try {
+        const res = await fetch("/api/activities", {
+          method: value.id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...value, term: activeTerm, slot: activeSlot }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) {
+          setActivityError(data?.message || "Could not save that block.");
+          return;
+        }
+        setActivityError(null);
+        setActivityDraft(null);
+        fetchSchedule();
+      } finally {
+        setSavingActivity(false);
+      }
+    },
+    [activeTerm, activeSlot, fetchSchedule]
+  );
+
+  const deleteActivity = useCallback(
+    async (id: number) => {
+      setSavingActivity(true);
+      try {
+        await fetch("/api/activities", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        setActivityDraft(null);
+        setActivityError(null);
+        fetchSchedule();
+      } finally {
+        setSavingActivity(false);
+      }
+    },
+    [fetchSchedule]
+  );
 
   const blockKey = (b: { course: ScheduledCourse; isPreview?: boolean }) =>
     `${b.isPreview ? "~" : ""}${b.course.offering_name}::${b.course.section_name}`;
@@ -1418,7 +1659,9 @@ export default function Home() {
 
               {/* Grid body */}
               <div
-                className="relative grid mt-1.5"
+                ref={gridRef}
+                onMouseDown={startDrag}
+                className="relative grid mt-1.5 select-none"
                 style={{
                   gridTemplateColumns: "52px repeat(5, 1fr)",
                 }}
@@ -1467,6 +1710,59 @@ export default function Home() {
                           </span>
                           <span className="text-[10px] text-emerald-600 leading-snug truncate block mt-0.5 opacity-80">
                             {block.course.title}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (block.activity) {
+                    const a = block.activity;
+                    const open = activityDraft?.id === a.id;
+                    return (
+                      <div
+                        key={`activity-${a.id}-${block.dayIdx}`}
+                        data-course-block
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setActivityError(null);
+                          setActivityDraft({
+                            id: a.id,
+                            name: a.name,
+                            days: a.days,
+                            start_min: a.start_min,
+                            end_min: a.end_min,
+                            dayIdx: block.dayIdx,
+                            top: block.top,
+                          });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            (e.currentTarget as HTMLElement).click();
+                          }
+                        }}
+                        className={`absolute rounded-lg overflow-hidden cursor-pointer transition-shadow hover:shadow-md ${
+                          open ? "ring-2 ring-violet-400" : ""
+                        }`}
+                        style={{
+                          top: block.top,
+                          height: block.height,
+                          left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
+                          width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
+                          // Deliberately not from the course palette: an
+                          // activity should never be mistaken for a class.
+                          background:
+                            "repeating-linear-gradient(135deg, #f5f3ff, #f5f3ff 6px, #ede9fe 6px, #ede9fe 12px)",
+                          borderLeft: "3px solid #a78bfa",
+                          color: "#4c1d95",
+                        }}
+                      >
+                        <div className="px-2 py-1.5 h-full flex flex-col">
+                          <span className="text-[10px] font-bold leading-none truncate">{a.name}</span>
+                          <span className="text-[9px] leading-snug truncate mt-0.5 opacity-70">
+                            {minutesToLabel(a.start_min)}
                           </span>
                         </div>
                       </div>
@@ -1602,6 +1898,69 @@ export default function Home() {
                     </div>
                   );
                 })}
+
+                {/* The region being swept out, before it has a name. */}
+                {drag && (() => {
+                  const lo = snap(Math.min(drag.fromMin, drag.toMin));
+                  const hi = snap(Math.max(drag.fromMin, drag.toMin));
+                  if (hi - lo < MIN_DURATION_MIN) return null;
+                  return (
+                    <div
+                      data-grid-overlay
+                      className="absolute rounded-lg border-2 border-dashed border-violet-400 bg-violet-100/50 pointer-events-none flex items-start justify-center pt-1"
+                      style={{
+                        top: ((lo - GRID_START_MIN) / 60) * ROW_H,
+                        height: ((hi - lo) / 60) * ROW_H,
+                        left: `calc(52px + ${drag.dayIdx} * ((100% - 52px) / 5) + 3px)`,
+                        width: `calc((100% - 52px) / 5 - 6px)`,
+                        zIndex: 30,
+                      }}
+                    >
+                      <span className="text-[10px] font-semibold text-violet-700">
+                        {minutesToLabel(lo)} – {minutesToLabel(hi)}
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* Naming a new block, or editing one that exists. */}
+                {activityDraft && (
+                  <div
+                    data-grid-overlay
+                    className="absolute"
+                    style={{
+                      top: activityDraft.top,
+                      left: `calc(52px + ${activityDraft.dayIdx} * ((100% - 52px) / 5) + 3px)`,
+                      width: `calc((100% - 52px) / 5 - 6px)`,
+                      zIndex: 50,
+                    }}
+                  >
+                    <div
+                      className={`absolute ${
+                        activityDraft.top > (HOURS.length * ROW_H) / 2 ? "bottom-0 mb-1" : "top-0"
+                      } ${activityDraft.dayIdx >= 3 ? "right-0" : "left-0"}`}
+                    >
+                      <ActivityEditor
+                        key={activityDraft.id ?? `new-${activityDraft.dayIdx}-${activityDraft.start_min}`}
+                        draft={activityDraft}
+                        saving={savingActivity}
+                        onSave={saveActivity}
+                        onCancel={() => {
+                          setActivityDraft(null);
+                          setActivityError(null);
+                        }}
+                        onDelete={
+                          activityDraft.id ? () => deleteActivity(activityDraft.id!) : undefined
+                        }
+                      />
+                      {activityError && (
+                        <p className="mt-1 px-2 py-1 rounded bg-red-50 text-[10px] text-red-600">
+                          {activityError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1728,6 +2087,83 @@ export default function Home() {
                         </p>
                       </div>
                     </div>
+
+                    {/* Sections — which one you're in, and the others */}
+                    {courseDetail && courseDetail !== "loading" && (courseDetail.sections?.length ?? 0) > 0 && (
+                      <div>
+                        <span className="text-[11px] text-slate-400">
+                          Sections ({courseDetail.sections!.length})
+                          {courseDetail.sections!.length > 1 && (
+                            <span className="text-slate-300"> · click to switch</span>
+                          )}
+                        </span>
+                        <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-100">
+                          {courseDetail.sections!.map((sec) => {
+                            const current = sec.section_name === selected.section_name;
+                            const busy = switchingSection === sec.section_name;
+                            const seats =
+                              sec.open_seats !== null && sec.max_seats !== null
+                                ? `${sec.open_seats}/${sec.max_seats}`
+                                : null;
+                            return (
+                              <button
+                                key={sec.section_name}
+                                type="button"
+                                disabled={current || switchingSection !== null}
+                                onClick={() => switchSection(sec)}
+                                aria-current={current}
+                                className={`w-full text-left px-2.5 py-1.5 flex items-center gap-2 text-[11px] transition-colors ${
+                                  current
+                                    ? "bg-blue-50 cursor-default"
+                                    : switchingSection !== null
+                                      ? "opacity-50 cursor-wait"
+                                      : "hover:bg-slate-50 cursor-pointer"
+                                }`}
+                              >
+                                <span
+                                  className={`font-mono font-semibold shrink-0 w-7 ${
+                                    current ? "text-blue-600" : "text-slate-500"
+                                  }`}
+                                >
+                                  {sec.section_name}
+                                </span>
+                                <span className="flex-1 min-w-0">
+                                  <span className="block truncate text-slate-600">
+                                    {sec.meetings || "TBA"}
+                                  </span>
+                                  <span className="block truncate text-slate-400 text-[10px]">
+                                    {sec.instructors_full_name || "Staff"}
+                                  </span>
+                                </span>
+                                {seats && (
+                                  <span
+                                    className={`shrink-0 text-[10px] ${
+                                      sec.open_seats === 0 ? "text-red-400" : "text-slate-400"
+                                    }`}
+                                    title={
+                                      sec.waitlisted
+                                        ? `${sec.waitlisted} on the waitlist`
+                                        : "Open seats / capacity"
+                                    }
+                                  >
+                                    {seats}
+                                  </span>
+                                )}
+                                <span className="shrink-0 w-12 text-right text-[10px] font-medium">
+                                  {busy ? (
+                                    <span className="text-violet-500">…</span>
+                                  ) : current ? (
+                                    <span className="text-blue-600">In plan</span>
+                                  ) : (
+                                    <span className="text-slate-300">Switch</span>
+                                  )}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Course evaluations */}
                     <div>

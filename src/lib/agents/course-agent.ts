@@ -23,6 +23,8 @@ import {
   viewSchedule,
   clearMySchedule,
   findNonConflictingCourses,
+  addActivity,
+  removeActivity,
 } from "../tools/schedule-tools";
 import { searchProfessors, findRatedInstructors } from "../tools/search-professors";
 
@@ -43,6 +45,8 @@ export function createCourseAgent(activeTerm: string, hasSisData: boolean, selec
     removeCourseFromSchedule,
     viewSchedule,
     clearMySchedule,
+    addActivity,
+    removeActivity,
     searchProfessors,
     findRatedInstructors,
     findNonConflictingCourses,
@@ -100,6 +104,7 @@ NEVER ask clarifying questions when you can just run the query. "Fit my schedule
 - When the user says "remove" or "drop" — use removeCourseFromSchedule.
 - When the user asks "what's on my schedule" — use viewSchedule.
 - When the user asks to clear their schedule — confirm first, then use clearMySchedule.
+ACTIVITIES: Anything that is not a JHU course but takes up time — a club, work shift, practice, lab meeting, commute — goes in with addActivity, never addCourseToSchedule. "Add chess club Tuesdays 5-6pm" → addActivity(name="Chess Club", days="T", start="5:00PM", end="6:00PM"). Infer a sensible name from what they said rather than asking. Use removeActivity to drop one. Activities already count as busy time in findNonConflictingCourses.
 - After adding or removing courses, briefly confirm what changed. The schedule panel updates automatically.
 
 Finding courses that fit the schedule — USE findNonConflictingCourses:

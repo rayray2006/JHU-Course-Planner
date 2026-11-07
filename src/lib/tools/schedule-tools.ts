@@ -4,6 +4,7 @@ import { supabase } from "../supabase";
 import { CURRENT_TERM } from "../terms";
 import { DEFAULT_SCHEDULE_SLOT, parseScheduleSlot } from "../schedule-slots";
 import { expandDays, hasConflict, parseMeetingTimes } from "../meeting-time";
+import { activityMeetings, minutesToLabel, parseTimeInput, validateActivity, type Activity } from "../activities";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
@@ -75,18 +76,113 @@ export const removeCourseFromSchedule = tool({
   },
 });
 
+/** The open schedule's activities, newest meeting first, for this session. */
+async function loadActivities(): Promise<Activity[]> {
+  const { data } = await supabase
+    .from("activities")
+    .select("id, name, days, start_min, end_min")
+    .eq("session_id", _sessionId)
+    .eq("schedule_slot", _scheduleSlot)
+    .eq("term", _activeTerm)
+    .order("start_min");
+  return (data ?? []) as Activity[];
+}
+
+export const addActivity = tool({
+  description:
+    "Add a custom non-course time block to the user's schedule — a club, work shift, practice, standing meeting. Use this whenever the user describes a commitment that is not a JHU course.",
+  inputSchema: z.object({
+    name: z.string().describe("What the block is called, e.g. 'Chess Club'"),
+    days: z.string().describe("Days it repeats on, SIS style: 'M', 'MW', 'TTh', 'MWF'"),
+    start: z.string().describe("Start time, e.g. '5:00PM' or '17:00'"),
+    end: z.string().describe("End time, e.g. '6:30PM' or '18:30'"),
+  }),
+  execute: async ({ name, days, start, end }) => {
+    const start_min = parseTimeInput(start);
+    const end_min = parseTimeInput(end);
+    if (start_min === null || end_min === null) {
+      return { success: false, message: `Could not read "${start}" - "${end}" as times.` };
+    }
+
+    const checked = validateActivity({ name, days, start_min, end_min });
+    if (!checked.ok) return { success: false, message: checked.error };
+
+    const { error } = await supabase.from("activities").insert({
+      session_id: _sessionId,
+      schedule_slot: _scheduleSlot,
+      term: _activeTerm,
+      ...checked.value,
+    });
+    if (error) return { success: false, message: error.message };
+
+    return {
+      success: true,
+      message: `Added "${checked.value.name}" on ${checked.value.days} from ${minutesToLabel(checked.value.start_min)} to ${minutesToLabel(checked.value.end_min)}.`,
+    };
+  },
+});
+
+export const removeActivity = tool({
+  description: "Remove a custom time block from the user's schedule by name.",
+  inputSchema: z.object({
+    name: z.string().describe("The activity's name, as the user calls it"),
+  }),
+  execute: async ({ name }) => {
+    const activities = await loadActivities();
+    const wanted = name.trim().toLowerCase();
+    // Exact name first; fall back to a contains match so "chess" finds
+    // "Chess Club", but never guess when that is ambiguous.
+    let matches = activities.filter((a) => a.name.toLowerCase() === wanted);
+    if (matches.length === 0) {
+      matches = activities.filter((a) => a.name.toLowerCase().includes(wanted));
+    }
+
+    if (matches.length === 0) {
+      return {
+        success: false,
+        message: activities.length
+          ? `No activity called "${name}". You have: ${activities.map((a) => a.name).join(", ")}.`
+          : "You have no custom activities in this schedule.",
+      };
+    }
+    if (matches.length > 1) {
+      return { success: false, message: `That matches several: ${matches.map((a) => a.name).join(", ")}. Which one?` };
+    }
+
+    const { error } = await supabase
+      .from("activities")
+      .delete()
+      .eq("id", matches[0].id)
+      .eq("session_id", _sessionId);
+    if (error) return { success: false, message: error.message };
+    return { success: true, message: `Removed "${matches[0].name}".` };
+  },
+});
+
 export const viewSchedule = tool({
-  description: "View all courses currently in the user's schedule for the current semester.",
+  description: "View everything currently in the user's schedule for the current semester — courses and custom activities.",
   inputSchema: z.object({}),
   execute: async () => {
-    const { data: scheduleRows } = await supabase
-      .from("schedules")
-      .select("offering_name, section_name")
-      .eq("session_id", _sessionId)
-      .eq("schedule_slot", _scheduleSlot)
-      .eq("term", _activeTerm);
+    const [{ data: scheduleRows }, activities] = await Promise.all([
+      supabase
+        .from("schedules")
+        .select("offering_name, section_name")
+        .eq("session_id", _sessionId)
+        .eq("schedule_slot", _scheduleSlot)
+        .eq("term", _activeTerm),
+      loadActivities(),
+    ]);
 
-    if (!scheduleRows || scheduleRows.length === 0) return { courses: [], message: `Your ${_activeTerm} schedule is empty.` };
+    const activityList = activities.map((a) => ({
+      name: a.name,
+      meetings: activityMeetings(a),
+    }));
+
+    if (!scheduleRows || scheduleRows.length === 0) {
+      return activityList.length
+        ? { courses: [], activities: activityList, message: `Your ${_activeTerm} schedule has no courses, only: ${activityList.map((a) => a.name).join(", ")}.` }
+        : { courses: [], activities: [], message: `Your ${_activeTerm} schedule is empty.` };
+    }
 
     const orFilter = scheduleRows
       .map((r) => `and(offering_name.eq.${r.offering_name},section_name.eq.${r.section_name})`)
@@ -103,16 +199,21 @@ export const viewSchedule = tool({
       return sum + (isNaN(n) ? 0 : n);
     }, 0);
 
-    return { courses: courses || [], totalCredits, count: (courses || []).length, term: _activeTerm };
+    return { courses: courses || [], activities: activityList, totalCredits, count: (courses || []).length, term: _activeTerm };
   },
 });
 
 export const clearMySchedule = tool({
-  description: "Clear all courses from the user's schedule for the current semester. Ask for confirmation first.",
+  description: "Clear the user's whole schedule for the current semester — courses and custom activities. Ask for confirmation first.",
   inputSchema: z.object({}),
   execute: async () => {
-    await supabase.from("schedules").delete().eq("session_id", _sessionId).eq("schedule_slot", _scheduleSlot).eq("term", _activeTerm);
-    return { success: true, message: `${_activeTerm} schedule cleared.` };
+    // Activities live in their own table, so clearing only `schedules` would
+    // leave the club blocks sitting on an otherwise empty calendar.
+    await Promise.all([
+      supabase.from("schedules").delete().eq("session_id", _sessionId).eq("schedule_slot", _scheduleSlot).eq("term", _activeTerm),
+      supabase.from("activities").delete().eq("session_id", _sessionId).eq("schedule_slot", _scheduleSlot).eq("term", _activeTerm),
+    ]);
+    return { success: true, message: `${_activeTerm} schedule cleared, including custom activities.` };
   },
 });
 
@@ -164,12 +265,15 @@ export const findNonConflictingCourses = tool({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function findNonConflictingExecute(input: any) {
     // 1. Get user's current schedule for this term
-    const { data: scheduleRows } = await supabase
-      .from("schedules")
-      .select("offering_name, section_name")
-      .eq("session_id", _sessionId)
-      .eq("schedule_slot", _scheduleSlot)
-      .eq("term", _activeTerm);
+    const [{ data: scheduleRows }, busyActivities] = await Promise.all([
+      supabase
+        .from("schedules")
+        .select("offering_name, section_name")
+        .eq("session_id", _sessionId)
+        .eq("schedule_slot", _scheduleSlot)
+        .eq("term", _activeTerm),
+      loadActivities(),
+    ]);
 
     const scheduleEmpty = !scheduleRows || scheduleRows.length === 0;
 
@@ -198,6 +302,10 @@ async function findNonConflictingExecute(input: any) {
           .map((r) => r.offering_name)
       );
     }
+
+    // A club meeting blocks a class hour exactly as another class would, so
+    // custom activities join the busy list the conflict check runs against.
+    scheduledMeetings.push(...busyActivities.map(activityMeetings));
 
     if (input.extraMeetings) {
       scheduledMeetings.push(...input.extraMeetings);

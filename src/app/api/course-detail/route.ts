@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
   // while the catalogue has descriptions for 9,513 courses. Consulting it only
   // when the course row was missing entirely meant "No description available"
   // on every course in a term that had SIS data.
-  const [posTags, { data }, { data: catData }] = await Promise.all([
+  const [posTags, { data }, { data: catData }, { data: sections }] = await Promise.all([
     getCoursePosTags(code),
     supabase
       .from("courses")
@@ -48,6 +48,14 @@ export async function GET(req: NextRequest) {
       .eq("offering_name", code)
       .limit(1)
       .maybeSingle(),
+    // Every section of this course, so the detail card can offer the others
+    // and switch between them without a second request.
+    supabase
+      .from("courses")
+      .select("section_name, meetings, instructors_full_name, status, open_seats, max_seats, waitlisted, location, building, instruction_method")
+      .eq("offering_name", code)
+      .eq("term", term)
+      .order("section_name"),
   ]);
 
   if (data) {
@@ -60,6 +68,7 @@ export async function GET(req: NextRequest) {
       corequisites: data.corequisites || catData?.corequisites || "",
       restrictions: data.restrictions || catData?.restrictions || "",
       pos_tags: posTags,
+      sections: sections ?? [],
     });
   }
 
@@ -76,6 +85,7 @@ export async function GET(req: NextRequest) {
       num_respondents: 0,
       source: "catalogue",
       pos_tags: posTags,
+      sections: sections ?? [],
     });
   }
 
