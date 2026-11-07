@@ -1618,12 +1618,13 @@ export default function Home() {
 
         {/* Grid area */}
         <div className="flex-1 overflow-auto relative">
-          {schedule.length === 0 && !previewCourse ? (
-            // Keep the grid up while a section is being previewed: on an empty
-            // schedule the placeholder would otherwise replace the very thing
-            // the hover is meant to draw on, so the first course you look at
-            // appears to preview nothing at all.
-            <div className="flex items-center justify-center h-full">
+          {/* The grid is always drawn, even with nothing on it: the empty
+              state used to replace it, which left a new visitor with no week
+              to drag an activity onto, and blanked the very thing a hover
+              preview is meant to draw on. It is now an overlay that lets the
+              pointer through to the grid underneath. */}
+          {schedule.length === 0 && activities.length === 0 && !previewCourse && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
               <div className="text-center space-y-2 max-w-xs">
                 <div className="mx-auto w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300 text-xl">
                   +
@@ -1632,338 +1633,337 @@ export default function Home() {
                   Your schedule is empty
                 </p>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Search for courses in the chat panel and ask to add them to
-                  your schedule.
+                  Ask the chat to add courses, or drag across the calendar to
+                  block out a club, shift or anything else.
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="min-w-[640px] p-4">
-              {/* Day headers */}
-              <div
-                className="grid sticky top-0 z-10 bg-slate-50/95 backdrop-blur-sm"
-                style={{
-                  gridTemplateColumns: "52px repeat(5, 1fr)",
-                }}
-              >
-                <div />
-                {DAYS_SHORT.map((d) => (
+          )}
+          <div className="min-w-[640px] p-4">
+            {/* Day headers */}
+            <div
+              className="grid sticky top-0 z-10 bg-slate-50/95 backdrop-blur-sm"
+              style={{
+                gridTemplateColumns: "52px repeat(5, 1fr)",
+              }}
+            >
+              <div />
+              {DAYS_SHORT.map((d) => (
+                <div
+                  key={d}
+                  className="text-center text-[11px] font-semibold text-slate-400 uppercase tracking-wider py-2"
+                >
+                  {d}
+                </div>
+              ))}
+            </div>
+
+            {/* Grid body */}
+            <div
+              ref={gridRef}
+              onMouseDown={startDrag}
+              className="relative grid mt-1.5 select-none"
+              style={{
+                gridTemplateColumns: "52px repeat(5, 1fr)",
+              }}
+            >
+              {/* Hour rows */}
+              {HOURS.map((h) => (
+                <div key={h} className="contents">
                   <div
-                    key={d}
-                    className="text-center text-[11px] font-semibold text-slate-400 uppercase tracking-wider py-2"
+                    className="text-[10px] text-slate-400 text-right pr-2 -translate-y-1.5 select-none"
+                    style={{ height: ROW_H }}
                   >
-                    {d}
+                    {h > 12 ? h - 12 : h} {h >= 12 ? "pm" : "am"}
                   </div>
-                ))}
-              </div>
-
-              {/* Grid body */}
-              <div
-                ref={gridRef}
-                onMouseDown={startDrag}
-                className="relative grid mt-1.5 select-none"
-                style={{
-                  gridTemplateColumns: "52px repeat(5, 1fr)",
-                }}
-              >
-                {/* Hour rows */}
-                {HOURS.map((h) => (
-                  <div key={h} className="contents">
+                  {DAYS_SHORT.map((_, di) => (
                     <div
-                      className="text-[10px] text-slate-400 text-right pr-2 -translate-y-1.5 select-none"
+                      key={di}
+                      className="border-t border-slate-100"
                       style={{ height: ROW_H }}
-                    >
-                      {h > 12 ? h - 12 : h} {h >= 12 ? "pm" : "am"}
-                    </div>
-                    {DAYS_SHORT.map((_, di) => (
-                      <div
-                        key={di}
-                        className="border-t border-slate-100"
-                        style={{ height: ROW_H }}
-                      />
-                    ))}
-                  </div>
-                ))}
+                    />
+                  ))}
+                </div>
+              ))}
 
-                {/* Course blocks */}
-                {placedBlocks.map(({ block, lane: idx, lanes: total }) => {
-                  const pal = colorOf(block.course);
+              {/* Course blocks */}
+              {placedBlocks.map(({ block, lane: idx, lanes: total }) => {
+                const pal = colorOf(block.course);
 
-                  if (block.isPreview) {
-                    return (
-                      <div
-                        key={`preview-${block.dayIdx}-${block.top}`}
-                        className="absolute rounded-lg overflow-hidden pointer-events-none"
-                        style={{
-                          top: block.top,
-                          height: block.height,
-                          left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
-                          width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
-                          background: "rgba(16, 185, 129, 0.12)",
-                          border: "2px dashed rgba(16, 185, 129, 0.5)",
-                          zIndex: 15,
-                        }}
-                      >
-                        <div className="px-2 py-1.5">
-                          <span className="text-[10px] font-bold text-emerald-700 leading-none truncate block">
-                            {block.course.offering_name}
-                          </span>
-                          <span className="text-[10px] text-emerald-600 leading-snug truncate block mt-0.5 opacity-80">
-                            {block.course.title}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  if (block.activity) {
-                    const a = block.activity;
-                    const open = activityDraft?.id === a.id;
-                    return (
-                      <div
-                        key={`activity-${a.id}-${block.dayIdx}`}
-                        data-course-block
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                          setActivityError(null);
-                          setActivityDraft({
-                            id: a.id,
-                            name: a.name,
-                            days: a.days,
-                            start_min: a.start_min,
-                            end_min: a.end_min,
-                            dayIdx: block.dayIdx,
-                            top: block.top,
-                          });
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            (e.currentTarget as HTMLElement).click();
-                          }
-                        }}
-                        className={`absolute rounded-lg overflow-hidden cursor-pointer transition-shadow hover:shadow-md ${
-                          open ? "ring-2 ring-violet-400" : ""
-                        }`}
-                        style={{
-                          top: block.top,
-                          height: block.height,
-                          left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
-                          width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
-                          // Deliberately not from the course palette: an
-                          // activity should never be mistaken for a class.
-                          background:
-                            "repeating-linear-gradient(135deg, #f5f3ff, #f5f3ff 6px, #ede9fe 6px, #ede9fe 12px)",
-                          borderLeft: "3px solid #a78bfa",
-                          color: "#4c1d95",
-                        }}
-                      >
-                        <div className="px-2 py-1.5 h-full flex flex-col">
-                          <span className="text-[10px] font-bold leading-none truncate">{a.name}</span>
-                          <span className="text-[9px] leading-snug truncate mt-0.5 opacity-70">
-                            {minutesToLabel(a.start_min)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  }
-
+                if (block.isPreview) {
                   return (
                     <div
-                      key={`${block.course.offering_name}-${block.course.section_name}-${block.dayIdx}-${block.top}`}
-                      data-course-block
-                      className="absolute rounded-lg overflow-hidden group cursor-pointer transition-shadow hover:shadow-md"
+                      key={`preview-${block.dayIdx}-${block.top}`}
+                      className="absolute rounded-lg overflow-hidden pointer-events-none"
                       style={{
                         top: block.top,
                         height: block.height,
                         left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
                         width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
-                        background: pal.bg,
-                        borderLeft: `3px solid ${pal.border}`,
-                        color: pal.text,
+                        background: "rgba(16, 185, 129, 0.12)",
+                        border: "2px dashed rgba(16, 185, 129, 0.5)",
+                        zIndex: 15,
                       }}
-                      onClick={() => setSelected(block.course)}
                     >
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          removeCourse(block.course);
-                        }}
-                        className="absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-black/10 transition-all"
-                        title="Remove"
-                      >
-                        &#10005;
-                      </button>
-                      <div className="px-2 py-1.5 h-full flex flex-col">
-                        <span className="text-[10px] font-bold leading-none truncate">
+                      <div className="px-2 py-1.5">
+                        <span className="text-[10px] font-bold text-emerald-700 leading-none truncate block">
                           {block.course.offering_name}
                         </span>
-                        <span className="text-[10px] leading-snug truncate mt-0.5 opacity-80 group-hover:hidden">
+                        <span className="text-[10px] text-emerald-600 leading-snug truncate block mt-0.5 opacity-80">
                           {block.course.title}
-                        </span>
-                        <span className="text-[10px] leading-snug truncate mt-0.5 opacity-90 hidden group-hover:block font-medium">
-                          Click for info
                         </span>
                       </div>
                     </div>
                   );
-                })}
+                }
 
-                {/* Crowded slots: past three columns a block is too narrow to
-                    read, so the tail of the stack collapses into one tile. */}
-                {crowdedSlots.map((slot) => {
-                  const id = `${slot.dayIdx}-${slot.top}`;
-                  const isOpen = openCrowded === id;
-                  // Flip the panel when the tile sits low in the grid, or when
-                  // it is on Thu/Fri, so it stays inside the visible area.
-                  const dropUp = slot.top > (HOURS.length * ROW_H) / 2;
-                  const alignRight = slot.dayIdx >= 3;
+                if (block.activity) {
+                  const a = block.activity;
+                  const open = activityDraft?.id === a.id;
                   return (
                     <div
-                      key={`crowded-${id}`}
-                      ref={isOpen ? crowdedRef : undefined}
-                      className="absolute"
+                      key={`activity-${a.id}-${block.dayIdx}`}
+                      data-course-block
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        setActivityError(null);
+                        setActivityDraft({
+                          id: a.id,
+                          name: a.name,
+                          days: a.days,
+                          start_min: a.start_min,
+                          end_min: a.end_min,
+                          dayIdx: block.dayIdx,
+                          top: block.top,
+                        });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          (e.currentTarget as HTMLElement).click();
+                        }
+                      }}
+                      className={`absolute rounded-lg overflow-hidden cursor-pointer transition-shadow hover:shadow-md ${
+                        open ? "ring-2 ring-violet-400" : ""
+                      }`}
                       style={{
-                        top: slot.top,
-                        height: slot.height,
-                        left: `calc(52px + ${slot.dayIdx} * ((100% - 52px) / 5) + 3px + ${slot.lane} * ((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
-                        width: `calc(((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
-                        zIndex: isOpen ? 40 : 16,
+                        top: block.top,
+                        height: block.height,
+                        left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
+                        width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
+                        // Deliberately not from the course palette: an
+                        // activity should never be mistaken for a class.
+                        background:
+                          "repeating-linear-gradient(135deg, #f5f3ff, #f5f3ff 6px, #ede9fe 6px, #ede9fe 12px)",
+                        borderLeft: "3px solid #a78bfa",
+                        color: "#4c1d95",
                       }}
                     >
-                      <button
-                        type="button"
-                        onClick={() => setOpenCrowded(isOpen ? null : id)}
-                        aria-expanded={isOpen}
-                        aria-label={`${slot.hidden.length} more courses at this time`}
-                        className={`w-full h-full rounded-lg border border-dashed flex flex-col items-center justify-center gap-0.5 transition-colors ${
-                          isOpen
-                            ? "border-slate-400 bg-slate-100 text-slate-700"
-                            : "border-slate-300 bg-slate-50 text-slate-500 hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                        }`}
-                      >
-                        <span className="text-[11px] font-bold leading-none">+{slot.hidden.length}</span>
-                        <span className="text-[9px] leading-none opacity-70">more</span>
-                      </button>
-
-                      {isOpen && (
-                        <div
-                          className={`absolute w-56 max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1 ${
-                            dropUp ? "bottom-full mb-1" : "top-full mt-1"
-                          } ${alignRight ? "right-0" : "left-0"}`}
-                        >
-                          <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                            {DAYS_SHORT[slot.dayIdx]} {formatSlotTime(slot.top, slot.height)}
-                          </div>
-                          {slot.hidden.map(({ course }) => {
-                            const pal = colorOf(course);
-                            return (
-                              <div
-                                key={`${course.offering_name}-${course.section_name}`}
-                                className="group/more flex items-start gap-2 px-2.5 py-1.5 hover:bg-slate-50 transition-colors"
-                              >
-                                <span
-                                  className="mt-[3px] w-2 h-2 rounded-full shrink-0"
-                                  style={{ background: pal.border }}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelected(course);
-                                    setOpenCrowded(null);
-                                  }}
-                                  className="flex-1 min-w-0 text-left"
-                                >
-                                  <span className="block text-[11px] font-semibold text-slate-700 truncate">
-                                    {course.offering_name}
-                                  </span>
-                                  <span className="block text-[10px] text-slate-500 truncate">
-                                    {course.title}
-                                  </span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeCourse(course)}
-                                  className="shrink-0 text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover/more:opacity-100 transition-opacity"
-                                  title="Remove"
-                                >
-                                  &#10005;
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                      <div className="px-2 py-1.5 h-full flex flex-col">
+                        <span className="text-[10px] font-bold leading-none truncate">{a.name}</span>
+                        <span className="text-[9px] leading-snug truncate mt-0.5 opacity-70">
+                          {minutesToLabel(a.start_min)}
+                        </span>
+                      </div>
                     </div>
                   );
-                })}
+                }
 
-                {/* The region being swept out, before it has a name. */}
-                {drag && (() => {
-                  const lo = snap(Math.min(drag.fromMin, drag.toMin));
-                  const hi = snap(Math.max(drag.fromMin, drag.toMin));
-                  if (hi - lo < MIN_DURATION_MIN) return null;
-                  return (
-                    <div
-                      data-grid-overlay
-                      className="absolute rounded-lg border-2 border-dashed border-violet-400 bg-violet-100/50 pointer-events-none flex items-start justify-center pt-1"
-                      style={{
-                        top: ((lo - GRID_START_MIN) / 60) * ROW_H,
-                        height: ((hi - lo) / 60) * ROW_H,
-                        left: `calc(52px + ${drag.dayIdx} * ((100% - 52px) / 5) + 3px)`,
-                        width: `calc((100% - 52px) / 5 - 6px)`,
-                        zIndex: 30,
+                return (
+                  <div
+                    key={`${block.course.offering_name}-${block.course.section_name}-${block.dayIdx}-${block.top}`}
+                    data-course-block
+                    className="absolute rounded-lg overflow-hidden group cursor-pointer transition-shadow hover:shadow-md"
+                    style={{
+                      top: block.top,
+                      height: block.height,
+                      left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
+                      width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
+                      background: pal.bg,
+                      borderLeft: `3px solid ${pal.border}`,
+                      color: pal.text,
+                    }}
+                    onClick={() => setSelected(block.course)}
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeCourse(block.course);
                       }}
+                      className="absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-black/10 transition-all"
+                      title="Remove"
                     >
-                      <span className="text-[10px] font-semibold text-violet-700">
-                        {minutesToLabel(lo)} – {minutesToLabel(hi)}
+                      &#10005;
+                    </button>
+                    <div className="px-2 py-1.5 h-full flex flex-col">
+                      <span className="text-[10px] font-bold leading-none truncate">
+                        {block.course.offering_name}
+                      </span>
+                      <span className="text-[10px] leading-snug truncate mt-0.5 opacity-80 group-hover:hidden">
+                        {block.course.title}
+                      </span>
+                      <span className="text-[10px] leading-snug truncate mt-0.5 opacity-90 hidden group-hover:block font-medium">
+                        Click for info
                       </span>
                     </div>
-                  );
-                })()}
+                  </div>
+                );
+              })}
 
-                {/* Naming a new block, or editing one that exists. */}
-                {activityDraft && (
+              {/* Crowded slots: past three columns a block is too narrow to
+                  read, so the tail of the stack collapses into one tile. */}
+              {crowdedSlots.map((slot) => {
+                const id = `${slot.dayIdx}-${slot.top}`;
+                const isOpen = openCrowded === id;
+                // Flip the panel when the tile sits low in the grid, or when
+                // it is on Thu/Fri, so it stays inside the visible area.
+                const dropUp = slot.top > (HOURS.length * ROW_H) / 2;
+                const alignRight = slot.dayIdx >= 3;
+                return (
                   <div
-                    data-grid-overlay
+                    key={`crowded-${id}`}
+                    ref={isOpen ? crowdedRef : undefined}
                     className="absolute"
                     style={{
-                      top: activityDraft.top,
-                      left: `calc(52px + ${activityDraft.dayIdx} * ((100% - 52px) / 5) + 3px)`,
-                      width: `calc((100% - 52px) / 5 - 6px)`,
-                      zIndex: 50,
+                      top: slot.top,
+                      height: slot.height,
+                      left: `calc(52px + ${slot.dayIdx} * ((100% - 52px) / 5) + 3px + ${slot.lane} * ((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
+                      width: `calc(((100% - 52px) / 5 - 6px) / ${slot.lanes})`,
+                      zIndex: isOpen ? 40 : 16,
                     }}
                   >
-                    <div
-                      className={`absolute ${
-                        activityDraft.top > (HOURS.length * ROW_H) / 2 ? "bottom-0 mb-1" : "top-0"
-                      } ${activityDraft.dayIdx >= 3 ? "right-0" : "left-0"}`}
+                    <button
+                      type="button"
+                      onClick={() => setOpenCrowded(isOpen ? null : id)}
+                      aria-expanded={isOpen}
+                      aria-label={`${slot.hidden.length} more courses at this time`}
+                      className={`w-full h-full rounded-lg border border-dashed flex flex-col items-center justify-center gap-0.5 transition-colors ${
+                        isOpen
+                          ? "border-slate-400 bg-slate-100 text-slate-700"
+                          : "border-slate-300 bg-slate-50 text-slate-500 hover:border-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      }`}
                     >
-                      <ActivityEditor
-                        key={activityDraft.id ?? `new-${activityDraft.dayIdx}-${activityDraft.start_min}`}
-                        draft={activityDraft}
-                        saving={savingActivity}
-                        onSave={saveActivity}
-                        onCancel={() => {
-                          setActivityDraft(null);
-                          setActivityError(null);
-                        }}
-                        onDelete={
-                          activityDraft.id ? () => deleteActivity(activityDraft.id!) : undefined
-                        }
-                      />
-                      {activityError && (
-                        <p className="mt-1 px-2 py-1 rounded bg-red-50 text-[10px] text-red-600">
-                          {activityError}
-                        </p>
-                      )}
-                    </div>
+                      <span className="text-[11px] font-bold leading-none">+{slot.hidden.length}</span>
+                      <span className="text-[9px] leading-none opacity-70">more</span>
+                    </button>
+
+                    {isOpen && (
+                      <div
+                        className={`absolute w-56 max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1 ${
+                          dropUp ? "bottom-full mb-1" : "top-full mt-1"
+                        } ${alignRight ? "right-0" : "left-0"}`}
+                      >
+                        <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                          {DAYS_SHORT[slot.dayIdx]} {formatSlotTime(slot.top, slot.height)}
+                        </div>
+                        {slot.hidden.map(({ course }) => {
+                          const pal = colorOf(course);
+                          return (
+                            <div
+                              key={`${course.offering_name}-${course.section_name}`}
+                              className="group/more flex items-start gap-2 px-2.5 py-1.5 hover:bg-slate-50 transition-colors"
+                            >
+                              <span
+                                className="mt-[3px] w-2 h-2 rounded-full shrink-0"
+                                style={{ background: pal.border }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelected(course);
+                                  setOpenCrowded(null);
+                                }}
+                                className="flex-1 min-w-0 text-left"
+                              >
+                                <span className="block text-[11px] font-semibold text-slate-700 truncate">
+                                  {course.offering_name}
+                                </span>
+                                <span className="block text-[10px] text-slate-500 truncate">
+                                  {course.title}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeCourse(course)}
+                                className="shrink-0 text-[10px] text-slate-300 hover:text-red-500 opacity-0 group-hover/more:opacity-100 transition-opacity"
+                                title="Remove"
+                              >
+                                &#10005;
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                );
+              })}
+
+              {/* The region being swept out, before it has a name. */}
+              {drag && (() => {
+                const lo = snap(Math.min(drag.fromMin, drag.toMin));
+                const hi = snap(Math.max(drag.fromMin, drag.toMin));
+                if (hi - lo < MIN_DURATION_MIN) return null;
+                return (
+                  <div
+                    data-grid-overlay
+                    className="absolute rounded-lg border-2 border-dashed border-violet-400 bg-violet-100/50 pointer-events-none flex items-start justify-center pt-1"
+                    style={{
+                      top: ((lo - GRID_START_MIN) / 60) * ROW_H,
+                      height: ((hi - lo) / 60) * ROW_H,
+                      left: `calc(52px + ${drag.dayIdx} * ((100% - 52px) / 5) + 3px)`,
+                      width: `calc((100% - 52px) / 5 - 6px)`,
+                      zIndex: 30,
+                    }}
+                  >
+                    <span className="text-[10px] font-semibold text-violet-700">
+                      {minutesToLabel(lo)} – {minutesToLabel(hi)}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Naming a new block, or editing one that exists. */}
+              {activityDraft && (
+                <div
+                  data-grid-overlay
+                  className="absolute"
+                  style={{
+                    top: activityDraft.top,
+                    left: `calc(52px + ${activityDraft.dayIdx} * ((100% - 52px) / 5) + 3px)`,
+                    width: `calc((100% - 52px) / 5 - 6px)`,
+                    zIndex: 50,
+                  }}
+                >
+                  <div
+                    className={`absolute ${
+                      activityDraft.top > (HOURS.length * ROW_H) / 2 ? "bottom-0 mb-1" : "top-0"
+                    } ${activityDraft.dayIdx >= 3 ? "right-0" : "left-0"}`}
+                  >
+                    <ActivityEditor
+                      key={activityDraft.id ?? `new-${activityDraft.dayIdx}-${activityDraft.start_min}`}
+                      draft={activityDraft}
+                      saving={savingActivity}
+                      onSave={saveActivity}
+                      onCancel={() => {
+                        setActivityDraft(null);
+                        setActivityError(null);
+                      }}
+                      onDelete={
+                        activityDraft.id ? () => deleteActivity(activityDraft.id!) : undefined
+                      }
+                    />
+                    {activityError && (
+                      <p className="mt-1 px-2 py-1 rounded bg-red-50 text-[10px] text-red-600">
+                        {activityError}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {/* Courses with no meetings (TBA/online/PLAN in current term) — show as list below calendar */}
           {(() => {
