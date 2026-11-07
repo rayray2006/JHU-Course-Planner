@@ -36,6 +36,33 @@ interface ScheduledCourse {
   department: string;
 }
 
+/**
+ * A section row from the detail card, shaped like a scheduled course so the
+ * calendar can draw it. The hover ghost and the actual switch both go through
+ * here, so the block you preview is exactly the block you get.
+ */
+function sectionAsCourse(
+  base: ScheduledCourse,
+  sec: {
+    section_name: string;
+    meetings: string | null;
+    instructors_full_name: string | null;
+    location: string | null;
+    building: string | null;
+    instruction_method: string | null;
+  }
+): ScheduledCourse {
+  return {
+    ...base,
+    section_name: sec.section_name,
+    meetings: sec.meetings ?? "",
+    instructors_full_name: sec.instructors_full_name ?? "",
+    location: sec.location ?? "",
+    building: sec.building ?? "",
+    instruction_method: sec.instruction_method ?? "",
+  };
+}
+
 // --- Schedule grid constants ---
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8);
@@ -592,6 +619,24 @@ export default function Home() {
     previewActiveKey.current = null;
     setPreviewCourse(null);
   }, []);
+
+  /**
+   * Hovering a section in the detail card draws it on the calendar as a ghost,
+   * so you can see where you would land before committing to the switch.
+   *
+   * No fetch: the section rows already carry their meeting times, and a round
+   * trip per hover would make the ghost arrive after you had moved on. Nulling
+   * previewActiveKey also cancels any search-result preview still in flight,
+   * which would otherwise land on top of this one.
+   */
+  const previewSection = useCallback(
+    (sec: CourseSection) => {
+      if (!selected || sec.section_name === selected.section_name) return;
+      previewActiveKey.current = null;
+      setPreviewCourse(sectionAsCourse(selected, sec));
+    },
+    [selected]
+  );
   interface ProfRatingResult {
     name: string;
     rating: {
@@ -796,6 +841,9 @@ export default function Home() {
   const switchSection = useCallback(
     async (sec: CourseSection) => {
       if (!selected || sec.section_name === selected.section_name) return;
+      // Drop the hover ghost now: once the switch lands, the real block sits
+      // where the ghost is and the two would stack into a double-wide pair.
+      clearPreview();
       setSwitchingSection(sec.section_name);
       try {
         const add = await fetch("/api/schedule", {
@@ -822,21 +870,13 @@ export default function Home() {
           }),
         });
 
-        setSelected({
-          ...selected,
-          section_name: sec.section_name,
-          meetings: sec.meetings ?? "",
-          instructors_full_name: sec.instructors_full_name ?? "",
-          location: sec.location ?? "",
-          building: sec.building ?? "",
-          instruction_method: sec.instruction_method ?? "",
-        });
+        setSelected(sectionAsCourse(selected, sec));
         fetchSchedule();
       } finally {
         setSwitchingSection(null);
       }
     },
-    [selected, activeTerm, activeSlot, fetchSchedule]
+    [selected, activeTerm, activeSlot, fetchSchedule, clearPreview]
   );
 
   // Department-based color for search results
@@ -1706,8 +1746,18 @@ export default function Home() {
                       }}
                     >
                       <div className="px-2 py-1.5">
+                        {/* The section is part of the label: previewing a
+                            sibling section of a course already on the grid
+                            would otherwise give two identically-labelled
+                            blocks and no way to tell which is the ghost. */}
                         <span className="text-[10px] font-bold text-emerald-700 leading-none truncate block">
                           {block.course.offering_name}
+                          {block.course.section_name && (
+                            <span className="font-medium opacity-70">
+                              {" · "}
+                              {block.course.section_name}
+                            </span>
+                          )}
                         </span>
                         <span className="text-[10px] text-emerald-600 leading-snug truncate block mt-0.5 opacity-80">
                           {block.course.title}
@@ -2006,7 +2056,14 @@ export default function Home() {
           {selected && panelReady && (
             <div
               ref={panelRef}
-              className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_24px_rgba(0,0,0,0.08)] z-20 max-h-[60%] flex flex-col"
+              // The panel covers the bottom of the week, which is exactly
+              // where a previewed section's ghost tends to land. Fade it while
+              // a preview is up so the ghost is visible through it — pointer
+              // events stay on, so the row under the cursor keeps its hover
+              // and stays clickable.
+              className={`absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_24px_rgba(0,0,0,0.08)] z-20 max-h-[60%] flex flex-col transition-opacity duration-150 ${
+                previewCourse ? "opacity-30" : "opacity-100"
+              }`}
             >
               <div className="flex-1 overflow-y-auto px-5 py-3">
                 {/* Header */}
@@ -2111,6 +2168,12 @@ export default function Home() {
                                 type="button"
                                 disabled={current || switchingSection !== null}
                                 onClick={() => switchSection(sec)}
+                                onMouseEnter={() => previewSection(sec)}
+                                onMouseLeave={clearPreview}
+                                // Keyboard parity: tabbing through the list
+                                // draws the same ghost a hover does.
+                                onFocus={() => previewSection(sec)}
+                                onBlur={clearPreview}
                                 aria-current={current}
                                 className={`w-full text-left px-2.5 py-1.5 flex items-center gap-2 text-[11px] transition-colors ${
                                   current
