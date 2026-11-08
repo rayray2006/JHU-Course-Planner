@@ -63,6 +63,32 @@ function sectionAsCourse(
   };
 }
 
+/**
+ * The course-code line on a calendar block: "EN.601.226 · 02".
+ *
+ * The section is deliberately `shrink-0` while the code truncates. In a
+ * three-lane stack a block is narrow enough that `truncate` on the whole
+ * string would eat the section first — and the section is the only thing
+ * telling two blocks of the same course apart, which is the entire reason it
+ * is on the block.
+ */
+function BlockCode({
+  code,
+  section,
+  className,
+}: {
+  code: string;
+  section?: string;
+  className?: string;
+}) {
+  return (
+    <span className={`flex items-baseline gap-0.5 min-w-0 ${className ?? ""}`}>
+      <span className="truncate">{code}</span>
+      {section && <span className="shrink-0 font-medium opacity-70">· {section}</span>}
+    </span>
+  );
+}
+
 // --- Schedule grid constants ---
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8);
@@ -1746,19 +1772,11 @@ export default function Home() {
                       }}
                     >
                       <div className="px-2 py-1.5">
-                        {/* The section is part of the label: previewing a
-                            sibling section of a course already on the grid
-                            would otherwise give two identically-labelled
-                            blocks and no way to tell which is the ghost. */}
-                        <span className="text-[10px] font-bold text-emerald-700 leading-none truncate block">
-                          {block.course.offering_name}
-                          {block.course.section_name && (
-                            <span className="font-medium opacity-70">
-                              {" · "}
-                              {block.course.section_name}
-                            </span>
-                          )}
-                        </span>
+                        <BlockCode
+                          code={block.course.offering_name}
+                          section={block.course.section_name}
+                          className="text-[10px] font-bold text-emerald-700 leading-none"
+                        />
                         <span className="text-[10px] text-emerald-600 leading-snug truncate block mt-0.5 opacity-80">
                           {block.course.title}
                         </span>
@@ -1847,9 +1865,11 @@ export default function Home() {
                       &#10005;
                     </button>
                     <div className="px-2 py-1.5 h-full flex flex-col">
-                      <span className="text-[10px] font-bold leading-none truncate">
-                        {block.course.offering_name}
-                      </span>
+                      <BlockCode
+                        code={block.course.offering_name}
+                        section={block.course.section_name}
+                        className="text-[10px] font-bold leading-none"
+                      />
                       <span className="text-[10px] leading-snug truncate mt-0.5 opacity-80 group-hover:hidden">
                         {block.course.title}
                       </span>
@@ -1926,9 +1946,11 @@ export default function Home() {
                                 }}
                                 className="flex-1 min-w-0 text-left"
                               >
-                                <span className="block text-[11px] font-semibold text-slate-700 truncate">
-                                  {course.offering_name}
-                                </span>
+                                <BlockCode
+                                  code={course.offering_name}
+                                  section={course.section_name}
+                                  className="text-[11px] font-semibold text-slate-700"
+                                />
                                 <span className="block text-[10px] text-slate-500 truncate">
                                   {course.title}
                                 </span>
