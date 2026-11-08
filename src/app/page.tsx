@@ -777,6 +777,54 @@ export default function Home() {
   const [panelReady, setPanelReady] = useState(false);
   const loadedOffering = useRef<string | null>(null);
   const [switchingSection, setSwitchingSection] = useState<string | null>(null);
+  const [sendingToSis, setSendingToSis] = useState(false);
+  const [sisError, setSisError] = useState<string | null>(null);
+
+  /**
+   * Hand this schedule to SIS's "add to cart" endpoint, the way semester.ly's
+   * crest button does: a top-level form POST to https://sis.jhu.edu/sswf/go/
+   * carrying one hidden `data` field of JSON.
+   *
+   * It has to be a real form submit rather than a fetch — the point is to land
+   * the user *on* SIS, where their own session authorises the cart write and
+   * SIS shows them what it did. A fetch would be a cross-origin POST with no
+   * way to see or act on the result.
+   *
+   * Our server assembles the body (it needs the SIS API to resolve section
+   * ids); the browser only posts it.
+   */
+  const sendToSis = useCallback(async () => {
+    setSendingToSis(true);
+    setSisError(null);
+    try {
+      const res = await fetch("/api/sis-cart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ term: activeTerm, slot: activeSlot }),
+      });
+      const data = await res.json();
+      if (!data?.ok) {
+        setSisError(data?.message || "Could not build the SIS request.");
+        return;
+      }
+
+      const form = document.createElement("form");
+      form.method = "post";
+      form.action = data.endpoint;
+      form.encType = "application/x-www-form-urlencoded";
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "data";
+      input.value = JSON.stringify(data.payload);
+      form.appendChild(input);
+      document.body.appendChild(form);
+      form.submit();
+    } catch {
+      setSisError("Could not reach the server.");
+    } finally {
+      setSendingToSis(false);
+    }
+  }, [activeTerm, activeSlot]);
   useEffect(() => {
     if (!selected) {
       setProfRatings(null);
@@ -1323,6 +1371,30 @@ export default function Home() {
                 <span><span className="font-semibold text-slate-600">{schedule.length}</span> course{schedule.length !== 1 && "s"}</span>
                 <span className="w-px h-3 bg-slate-200" />
                 <span><span className="font-semibold text-slate-600">{totalCredits}</span> cr</span>
+                <span className="w-px h-3 bg-slate-200" />
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={sendToSis}
+                    disabled={sendingToSis}
+                    title="Add every course in this schedule to your SIS cart"
+                    className="px-2 py-1 rounded-md text-[11px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 disabled:text-slate-400 disabled:bg-slate-100 transition-colors"
+                  >
+                    {sendingToSis ? "Opening SIS…" : "Add to SIS cart"}
+                  </button>
+                  {sisError && (
+                    <div className="absolute top-full right-0 mt-1 z-50 w-56 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] leading-snug text-amber-700 shadow-lg">
+                      {sisError}
+                      <button
+                        type="button"
+                        onClick={() => setSisError(null)}
+                        className="block mt-1 font-semibold text-amber-600 hover:text-amber-800"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+                </div>
               </Fragment>
             )}
           </div>
