@@ -89,6 +89,9 @@ function BlockCode({
   );
 }
 
+/** Named so a second "Add to SIS cart" reuses the tab instead of stacking them. */
+const SIS_TAB_NAME = "jhu-planner-sis-cart";
+
 // --- Schedule grid constants ---
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8);
@@ -794,6 +797,24 @@ export default function Home() {
    * ids); the browser only posts it.
    */
   const sendToSis = useCallback(async () => {
+    // Open the tab NOW, synchronously, while the click's user gesture is still
+    // live. The payload fetch below is an await, and a window opened on the
+    // far side of it counts as an unsolicited popup and gets blocked.
+    //
+    // A fixed name means a second click reuses this tab instead of stacking up
+    // a new one each time. If the browser blocks it anyway we get null back
+    // and fall through to posting in place, which is still the working path.
+    let tab: Window | null = null;
+    try {
+      tab = window.open("", SIS_TAB_NAME);
+      tab?.document.write(
+        "<!doctype html><title>Opening SIS…</title>" +
+          "<body style=\"font:14px system-ui;padding:2rem;color:#475569\">Opening SIS…</body>"
+      );
+    } catch {
+      tab = null;
+    }
+
     setSendingToSis(true);
     setSisError(null);
     try {
@@ -804,6 +825,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (!data?.ok) {
+        tab?.close();
         setSisError(data?.message || "Could not build the SIS request.");
         return;
       }
@@ -812,6 +834,7 @@ export default function Home() {
       form.method = "post";
       form.action = data.endpoint;
       form.encType = "application/x-www-form-urlencoded";
+      if (tab) form.target = SIS_TAB_NAME;
       const input = document.createElement("input");
       input.type = "hidden";
       input.name = "data";
@@ -819,7 +842,12 @@ export default function Home() {
       form.appendChild(input);
       document.body.appendChild(form);
       form.submit();
+      // This page used to be navigating away, so the form could stay behind.
+      // It now survives the submit and has to clean up after itself.
+      form.remove();
+      tab?.focus();
     } catch {
+      tab?.close();
       setSisError("Could not reach the server.");
     } finally {
       setSendingToSis(false);
