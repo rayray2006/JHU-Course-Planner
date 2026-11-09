@@ -96,12 +96,55 @@ const SIS_TAB_NAME = "jhu-planner-sis-cart";
 // --- Schedule grid constants ---
 const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8);
-const ROW_H = 52; // px per hour row
+/**
+ * Floor for the hour row, and the height used until the grid has been
+ * measured. Rows stretch past this to fill the viewport (see useRowHeight);
+ * they never compress below it, so a short window scrolls rather than
+ * squeezing a 50-minute class into something unreadable.
+ */
+const MIN_ROW_H = 52;
+
+/**
+ * Grows the hour row so the day's rows exactly fill the scroll area, which is
+ * what stops the hour lines from petering out halfway down a tall window.
+ *
+ * It measures rather than guesses, because the space above the rows is real
+ * layout — the sticky day headers and the padding — and hard-coding it would
+ * drift the moment either changed. `scrollEl` is the positioned ancestor, so
+ * the grid's own offsetTop is already the height of everything above it. That
+ * offset does not depend on the row height, so there is no feedback loop.
+ */
+function useRowHeight(
+  scrollRef: React.RefObject<HTMLDivElement | null>,
+  gridRef: React.RefObject<HTMLDivElement | null>
+) {
+  const [rowH, setRowH] = useState(MIN_ROW_H);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const measure = () => {
+      const gridEl = gridRef.current;
+      if (!gridEl) return;
+      // The grid sits inside a p-4 box, so leave its bottom padding behind.
+      const available = scrollEl.clientHeight - gridEl.offsetTop - 16;
+      setRowH(Math.max(MIN_ROW_H, available / HOURS.length));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollEl);
+    return () => observer.disconnect();
+  }, [scrollRef, gridRef]);
+
+  return rowH;
+}
 
 /** Turn a block's pixel geometry back into "10:30 – 11:45" for the grid's labels. */
-function formatSlotTime(top: number, height: number): string {
+function formatSlotTime(top: number, height: number, rowH: number): string {
   const clock = (px: number) => {
-    const mins = Math.round((px / ROW_H) * 60) + 8 * 60;
+    const mins = Math.round((px / rowH) * 60) + 8 * 60;
     const h24 = Math.floor(mins / 60);
     const m = mins % 60;
     const h = h24 % 12 === 0 ? 12 : h24 % 12;
@@ -406,6 +449,8 @@ export default function Home() {
   // While the pointer is down on empty grid, the region being swept out.
   const [drag, setDrag] = useState<{ dayIdx: number; fromMin: number; toMin: number } | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  const rowH = useRowHeight(gridScrollRef, gridRef);
 
   const [selected, setSelected] = useState<ScheduledCourse | null>(null);
   const [previewCourse, setPreviewCourse] = useState<ScheduledCourse | null>(null);
@@ -1013,8 +1058,8 @@ export default function Home() {
         blocks.push({
           course,
           dayIdx,
-          top: (mb.startHour - 8) * ROW_H + (mb.startMin / 60) * ROW_H,
-          height: (mb.endHour - mb.startHour) * ROW_H + ((mb.endMin - mb.startMin) / 60) * ROW_H,
+          top: (mb.startHour - 8) * rowH + (mb.startMin / 60) * rowH,
+          height: (mb.endHour - mb.startHour) * rowH + ((mb.endMin - mb.startMin) / 60) * rowH,
           isPreview,
         });
       });
@@ -1058,8 +1103,8 @@ export default function Home() {
     if (x < 52) return null;
     const colW = (rect.width - 52) / 5;
     const dayIdx = Math.min(4, Math.max(0, Math.floor((x - 52) / colW)));
-    const y = Math.min(HOURS.length * ROW_H, Math.max(0, clientY - rect.top));
-    return { dayIdx, min: GRID_START_MIN + (y / ROW_H) * 60 };
+    const y = Math.min(HOURS.length * rowH, Math.max(0, clientY - rect.top));
+    return { dayIdx, min: GRID_START_MIN + (y / rowH) * 60 };
   };
 
   const startDrag = (e: React.MouseEvent) => {
@@ -1099,7 +1144,7 @@ export default function Home() {
               start_min: start,
               end_min: end,
               dayIdx: d.dayIdx,
-              top: ((start - GRID_START_MIN) / 60) * ROW_H,
+              top: ((start - GRID_START_MIN) / 60) * rowH,
             });
           }
         }
@@ -1113,9 +1158,12 @@ export default function Home() {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
-    // pointToSlot reads a ref, so it needs no dependency of its own.
+    // pointToSlot reads a ref, so it needs no dependency of its own. rowH does
+    // need one: both handlers close over it to convert pixels to minutes, and
+    // a window resized mid-drag would otherwise keep measuring against the
+    // row height the grid had when the pointer went down.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag !== null]);
+  }, [drag !== null, rowH]);
 
   const saveActivity = useCallback(
     async (value: ActivityDraftState) => {
@@ -1785,7 +1833,7 @@ export default function Home() {
         )}
 
         {/* Grid area */}
-        <div className="flex-1 overflow-auto relative">
+        <div ref={gridScrollRef} className="flex-1 overflow-auto relative">
           {/* The grid is always drawn, even with nothing on it: the empty
               state used to replace it, which left a new visitor with no week
               to drag an activity onto, and blanked the very thing a hover
@@ -1840,7 +1888,7 @@ export default function Home() {
                 <div key={h} className="contents">
                   <div
                     className="text-[10px] text-slate-400 text-right pr-2 -translate-y-1.5 select-none"
-                    style={{ height: ROW_H }}
+                    style={{ height: rowH }}
                   >
                     {h > 12 ? h - 12 : h} {h >= 12 ? "pm" : "am"}
                   </div>
@@ -1848,7 +1896,7 @@ export default function Home() {
                     <div
                       key={di}
                       className="border-t border-slate-100"
-                      style={{ height: ROW_H }}
+                      style={{ height: rowH }}
                     />
                   ))}
                 </div>
@@ -1990,7 +2038,7 @@ export default function Home() {
                 const isOpen = openCrowded === id;
                 // Flip the panel when the tile sits low in the grid, or when
                 // it is on Thu/Fri, so it stays inside the visible area.
-                const dropUp = slot.top > (HOURS.length * ROW_H) / 2;
+                const dropUp = slot.top > (HOURS.length * rowH) / 2;
                 const alignRight = slot.dayIdx >= 3;
                 return (
                   <div
@@ -2027,7 +2075,7 @@ export default function Home() {
                         } ${alignRight ? "right-0" : "left-0"}`}
                       >
                         <div className="px-2.5 pt-1 pb-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                          {DAYS_SHORT[slot.dayIdx]} {formatSlotTime(slot.top, slot.height)}
+                          {DAYS_SHORT[slot.dayIdx]} {formatSlotTime(slot.top, slot.height, rowH)}
                         </div>
                         {slot.hidden.map(({ course }) => {
                           const pal = colorOf(course);
@@ -2084,8 +2132,8 @@ export default function Home() {
                     data-grid-overlay
                     className="absolute rounded-lg border-2 border-dashed border-violet-400 bg-violet-100/50 pointer-events-none flex items-start justify-center pt-1"
                     style={{
-                      top: ((lo - GRID_START_MIN) / 60) * ROW_H,
-                      height: ((hi - lo) / 60) * ROW_H,
+                      top: ((lo - GRID_START_MIN) / 60) * rowH,
+                      height: ((hi - lo) / 60) * rowH,
                       left: `calc(52px + ${drag.dayIdx} * ((100% - 52px) / 5) + 3px)`,
                       width: `calc((100% - 52px) / 5 - 6px)`,
                       zIndex: 30,
@@ -2112,7 +2160,7 @@ export default function Home() {
                 >
                   <div
                     className={`absolute ${
-                      activityDraft.top > (HOURS.length * ROW_H) / 2 ? "bottom-0 mb-1" : "top-0"
+                      activityDraft.top > (HOURS.length * rowH) / 2 ? "bottom-0 mb-1" : "top-0"
                     } ${activityDraft.dayIdx >= 3 ? "right-0" : "left-0"}`}
                   >
                     <ActivityEditor
