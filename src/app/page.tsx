@@ -1878,7 +1878,12 @@ export default function Home() {
             <div
               ref={gridRef}
               onMouseDown={startDrag}
-              className="relative grid mt-1.5 select-none"
+              // The gap has to clear more than the 8am line: each hour label
+              // is pulled up onto its own line, so the first one reaches above
+              // the top of the grid and would otherwise sit flush against the
+              // day names. useRowHeight measures this margin, so widening it
+              // trims the rows to match rather than overflowing the day.
+              className="relative grid mt-5 select-none"
               style={{
                 gridTemplateColumns: "52px repeat(5, 1fr)",
               }}
