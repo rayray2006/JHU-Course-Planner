@@ -12,6 +12,7 @@ import { SCHEDULE_SLOTS, DEFAULT_SCHEDULE_SLOT, parseScheduleSlot, scheduleSlotL
 import { parseMeetings } from "@/lib/schedule-utils";
 import { layoutWeek } from "@/lib/calendar-layout";
 import { ActivityEditor, type ActivityDraftState } from "@/components/ActivityEditor";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   GRID_END_MIN,
   GRID_START_MIN,
@@ -110,16 +111,16 @@ function formatSlotTime(top: number, height: number): string {
 }
 
 // --- Color palette (softer, more distinct) ---
-const PALETTE = [
-  { bg: "#dbeafe", border: "#93c5fd", text: "#1e3a5f" },
-  { bg: "#d1fae5", border: "#6ee7b7", text: "#064e3b" },
-  { bg: "#ede9fe", border: "#c4b5fd", text: "#3b0764" },
-  { bg: "#fef3c7", border: "#fcd34d", text: "#78350f" },
-  { bg: "#fce7f3", border: "#f9a8d4", text: "#831843" },
-  { bg: "#ccfbf1", border: "#5eead4", text: "#134e4a" },
-  { bg: "#ffedd5", border: "#fdba74", text: "#7c2d12" },
-  { bg: "#e0e7ff", border: "#a5b4fc", text: "#312e81" },
-];
+/**
+ * Indirect through CSS variables rather than hex, so a block repaints with the
+ * theme. These go into inline `style`, which no `dark:` class could reach.
+ * The light and dark values live together in globals.css.
+ */
+const PALETTE = Array.from({ length: 8 }, (_, i) => ({
+  bg: `var(--cal-${i}-bg)`,
+  border: `var(--cal-${i}-br)`,
+  text: `var(--cal-${i}-tx)`,
+}));
 
 // --- Markdown helper ---
 function md(text: string): string {
@@ -135,7 +136,7 @@ function md(text: string): string {
     line = line.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     line = line.replace(
       /`(.*?)`/g,
-      '<code style="background:#f1f5f9;padding:1px 4px;border-radius:4px;font-size:0.7rem;font-family:var(--font-mono)">$1</code>'
+      '<code style="background:var(--md-code-bg);padding:1px 4px;border-radius:4px;font-size:0.7rem;font-family:var(--font-mono)">$1</code>'
     );
 
     const subBullet = line.match(/^ {2,}\* (.+)/);
@@ -144,14 +145,14 @@ function md(text: string): string {
     if (subBullet) {
       if (!inList) { inList = true; listLevel = 1; }
       listLevel = 1;
-      out.push(`<div style="padding-left:20px;margin-top:2px;display:flex;gap:6px"><span style="color:#94a3b8;flex-shrink:0">↳</span><span>${subBullet[1]}</span></div>`);
+      out.push(`<div style="padding-left:20px;margin-top:2px;display:flex;gap:6px"><span style="color:var(--md-sub-arrow);flex-shrink:0">↳</span><span>${subBullet[1]}</span></div>`);
     } else if (topBullet) {
       if (inList) {
         out.push('<div style="margin-top:6px"></div>');
       }
       inList = true;
       listLevel = 0;
-      out.push(`<div style="margin-top:2px;display:flex;gap:6px"><span style="color:#94a3b8;flex-shrink:0">•</span><span>${topBullet[1]}</span></div>`);
+      out.push(`<div style="margin-top:2px;display:flex;gap:6px"><span style="color:var(--md-sub-arrow);flex-shrink:0">•</span><span>${topBullet[1]}</span></div>`);
     } else {
       if (inList) { inList = false; listLevel = 0; }
       line = line.replace(/\*(.*?)\*/g, "<em>$1</em>");
@@ -1202,6 +1203,7 @@ export default function Home() {
         <div className="flex items-center gap-3 px-4 h-12 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0 relative z-[100]">
           {/* Title + Term + Schedule picker */}
           <div className="flex items-center gap-2 shrink-0">
+            <ThemeToggle className="-ml-1 mr-0.5" />
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight">JHU Planner</h1>
             <span className="text-[11px] font-medium text-slate-500">{activeTerm}</span>
             <div className="relative" ref={slotRef}>
@@ -1866,8 +1868,8 @@ export default function Home() {
                         height: block.height,
                         left: `calc(52px + ${block.dayIdx} * ((100% - 52px) / 5) + 3px + ${idx} * ((100% - 52px) / 5 - 6px) / ${total})`,
                         width: `calc(((100% - 52px) / 5 - 6px) / ${total})`,
-                        background: "rgba(16, 185, 129, 0.12)",
-                        border: "2px dashed rgba(16, 185, 129, 0.5)",
+                        background: "var(--ghost-fill)",
+                        border: "2px dashed var(--ghost-border)",
                         zIndex: 15,
                       }}
                     >
@@ -1923,9 +1925,9 @@ export default function Home() {
                         // Deliberately not from the course palette: an
                         // activity should never be mistaken for a class.
                         background:
-                          "repeating-linear-gradient(135deg, #f5f3ff, #f5f3ff 6px, #ede9fe 6px, #ede9fe 12px)",
-                        borderLeft: "3px solid #a78bfa",
-                        color: "#4c1d95",
+                          "repeating-linear-gradient(135deg, var(--activity-stripe-a), var(--activity-stripe-a) 6px, var(--activity-stripe-b) 6px, var(--activity-stripe-b) 12px)",
+                        borderLeft: "3px solid var(--activity-border)",
+                        color: "var(--activity-text)",
                       }}
                     >
                       <div className="px-2 py-1.5 h-full flex flex-col">
@@ -2183,7 +2185,7 @@ export default function Home() {
               // a preview is up so the ghost is visible through it — pointer
               // events stay on, so the row under the cursor keeps its hover
               // and stays clickable.
-              className={`absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_24px_rgba(0,0,0,0.08)] z-20 max-h-[60%] flex flex-col transition-opacity duration-150 ${
+              className={`absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_24px_var(--panel-shadow)] z-20 max-h-[60%] flex flex-col transition-opacity duration-150 ${
                 previewCourse ? "opacity-30" : "opacity-100"
               }`}
             >
@@ -2370,8 +2372,8 @@ export default function Home() {
                                     style={{
                                       width: `${((value as number) / 5) * 100}%`,
                                       background: label === "Workload"
-                                        ? (value as number) > 3.5 ? "#f87171" : (value as number) > 2.5 ? "#fbbf24" : "#34d399"
-                                        : (value as number) >= 4 ? "#34d399" : (value as number) >= 3 ? "#fbbf24" : "#f87171",
+                                        ? (value as number) > 3.5 ? "var(--rating-bad)" : (value as number) > 2.5 ? "var(--rating-mid)" : "var(--rating-good)"
+                                        : (value as number) >= 4 ? "var(--rating-good)" : (value as number) >= 3 ? "var(--rating-mid)" : "var(--rating-bad)",
                                     }}
                                   />
                                 </div>

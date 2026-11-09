@@ -13,6 +13,7 @@ import {
   md,
 } from "@/lib/schedule-utils";
 import { MessageContent } from "./MessageContent";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type Tab = "schedule" | "chat";
 
@@ -113,6 +114,7 @@ function MobileHeader({ activeTerm, activeSlot, slotCounts, selectSlot }: {
     <header className="shrink-0 flex items-center justify-between px-4 h-12 border-b border-slate-200 bg-white safe-pt">
       <h1 className="text-[15px] font-semibold tracking-tight text-slate-900">JHU Planner</h1>
       <div className="flex items-center gap-2">
+        <ThemeToggle />
         <span className="text-[12px] font-medium text-slate-500">{activeTerm}</span>
         <div className="relative" ref={ref}>
           <button
@@ -347,7 +349,7 @@ function ScheduleEmpty({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="px-6 pt-20 pb-12 text-center">
       <div className="mx-auto w-14 h-14 rounded-2xl bg-blue-50 flex items-center justify-center mb-4">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="text-blue-600" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="4" width="18" height="18" rx="2" />
           <line x1="16" y1="2" x2="16" y2="6" />
           <line x1="8" y1="2" x2="8" y2="6" />
