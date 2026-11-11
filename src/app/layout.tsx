@@ -23,10 +23,10 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  // Matches --surface-page in the dark theme, which is what nearly everyone
+  // Matches --surface-page in the light theme, which is what nearly everyone
   // sees. A `media` split would key off the OS preference rather than the
   // class we actually render with, so it would be wrong more often than this.
-  themeColor: "#0c1220",
+  themeColor: "#f8fafc",
 };
 
 /**
@@ -34,8 +34,8 @@ export const viewport: Viewport = {
  * hydration catches up. It has to be inline and synchronous for that: an
  * imported module would load too late to matter.
  *
- * Dark is the default here, not the OS preference — only an explicit "light"
- * opts out. So the one case that needs the store to be readable is the
+ * Light is the default here, not the OS preference — only an explicit "dark"
+ * opts in. So the one case that needs the store to be readable is the
  * minority one, and an unreadable store (private windows throw) lands on the
  * default rather than on a guess. The try/catch is what keeps that throw from
  * blocking the document.
@@ -43,9 +43,10 @@ export const viewport: Viewport = {
 const THEME_INIT = `
 (function () {
   try {
-    if (localStorage.getItem('theme') === 'light') return;
+    if (localStorage.getItem('theme') === 'dark') {
+      document.documentElement.classList.add('dark');
+    }
   } catch (e) {}
-  document.documentElement.classList.add('dark');
 })();
 `;
 
