@@ -25,6 +25,7 @@ import {
   findNonConflictingCourses,
   addActivity,
   removeActivity,
+  removeAllActivities,
 } from "../tools/schedule-tools";
 import { searchProfessors, findRatedInstructors } from "../tools/search-professors";
 
@@ -47,6 +48,7 @@ export function createCourseAgent(activeTerm: string, hasSisData: boolean, selec
     clearMySchedule,
     addActivity,
     removeActivity,
+    removeAllActivities,
     searchProfessors,
     findRatedInstructors,
     findNonConflictingCourses,
@@ -104,7 +106,10 @@ NEVER ask clarifying questions when you can just run the query. "Fit my schedule
 - When the user says "remove" or "drop" — use removeCourseFromSchedule.
 - When the user asks "what's on my schedule" — use viewSchedule.
 - When the user asks to clear their schedule — confirm first, then use clearMySchedule.
-ACTIVITIES: Anything that is not a JHU course but takes up time — a club, work shift, practice, lab meeting, commute — goes in with addActivity, never addCourseToSchedule. "Add chess club Tuesdays 5-6pm" → addActivity(name="Chess Club", days="T", start="5:00PM", end="6:00PM"). Infer a sensible name from what they said rather than asking. Use removeActivity to drop one. Activities already count as busy time in findNonConflictingCourses.
+ACTIVITIES: Anything that is not a JHU course but takes up time — a club, work shift, practice, lab meeting, commute — goes in with addActivity, never addCourseToSchedule. "Add chess club Tuesdays 5-6pm" → addActivity(name="Chess Club", days="T", start="5:00PM", end="6:00PM"). Infer a sensible name from what they said rather than asking. Activities already count as busy time in findNonConflictingCourses.
+- To drop one, use removeActivity. Call it with whatever name the user gave, however short or odd — "remove d" means removeActivity(name="d"). Never ask them to repeat or spell out the name first; the tool tells you if nothing matches.
+- Two activities can share a name, so if it reports several matches, call it again with days or start to pick the one you mean — it lists each candidate's days and times for exactly that. Only ask the user which one if those details still do not settle it. Do not give up after one ambiguous result.
+- To drop every activity, use removeAllActivities. Never reach for clearMySchedule to do this: that deletes their courses too.
 - After adding or removing courses, briefly confirm what changed. The schedule panel updates automatically.
 
 Finding courses that fit the schedule — USE findNonConflictingCourses:

@@ -4,7 +4,7 @@ import { supabase } from "../supabase";
 import { CURRENT_TERM } from "../terms";
 import { DEFAULT_SCHEDULE_SLOT, parseScheduleSlot } from "../schedule-slots";
 import { expandDays, hasConflict, parseMeetingTimes } from "../meeting-time";
-import { activityMeetings, minutesToLabel, parseTimeInput, validateActivity, type Activity } from "../activities";
+import { activityMeetings, minutesToLabel, normalizeDays, parseTimeInput, validateActivity, type Activity } from "../activities";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
@@ -122,31 +122,87 @@ export const addActivity = tool({
   },
 });
 
+/** "d — W 3:45PM - 7:45PM", the form every ambiguity message is listed in. */
+function describeActivity(a: Activity): string {
+  return `"${a.name}" — ${activityMeetings(a)}`;
+}
+
 export const removeActivity = tool({
-  description: "Remove a custom time block from the user's schedule by name.",
+  description:
+    "Remove one custom time block from the user's schedule. Narrow it with days and/or start when the name alone is not unique — two blocks can share a name. To remove every activity at once, use removeAllActivities instead.",
   inputSchema: z.object({
-    name: z.string().describe("The activity's name, as the user calls it"),
+    name: z.string().optional().describe("The activity's name, as the user calls it"),
+    days: z
+      .string()
+      .optional()
+      .describe("Only match a block on these days, SIS style: 'W', 'Th', 'MW'"),
+    start: z
+      .string()
+      .optional()
+      .describe("Only match a block starting at this time, e.g. '3:45PM'"),
   }),
-  execute: async ({ name }) => {
+  execute: async ({ name, days, start }) => {
     const activities = await loadActivities();
-    const wanted = name.trim().toLowerCase();
-    // Exact name first; fall back to a contains match so "chess" finds
-    // "Chess Club", but never guess when that is ambiguous.
-    let matches = activities.filter((a) => a.name.toLowerCase() === wanted);
-    if (matches.length === 0) {
-      matches = activities.filter((a) => a.name.toLowerCase().includes(wanted));
+    if (activities.length === 0) {
+      return { success: false, message: "You have no custom activities in this schedule." };
     }
 
-    if (matches.length === 0) {
+    let matches = activities;
+
+    if (name?.trim()) {
+      const wanted = name.trim().toLowerCase();
+      // Exact name first; fall back to a contains match so "chess" finds
+      // "Chess Club", but never guess when that is ambiguous.
+      const exact = matches.filter((a) => a.name.toLowerCase() === wanted);
+      matches = exact.length ? exact : matches.filter((a) => a.name.toLowerCase().includes(wanted));
+      if (matches.length === 0) {
+        return {
+          success: false,
+          message: `No activity called "${name}". You have: ${activities.map(describeActivity).join("; ")}.`,
+        };
+      }
+    }
+
+    // Both filters go through the same normalisers the stored values went
+    // through, so "Wednesday" matches a row saved as "W" and "3:45 pm"
+    // matches one saved as 945 minutes.
+    if (days?.trim()) {
+      const wantedDays = normalizeDays(days);
+      const byDays = matches.filter((a) => a.days === wantedDays);
+      if (byDays.length === 0) {
+        return {
+          success: false,
+          message: `Nothing on ${days}. Candidates: ${matches.map(describeActivity).join("; ")}.`,
+        };
+      }
+      matches = byDays;
+    }
+
+    if (start?.trim()) {
+      const wantedStart = parseTimeInput(start);
+      if (wantedStart === null) {
+        return { success: false, message: `Could not read "${start}" as a time.` };
+      }
+      const byStart = matches.filter((a) => a.start_min === wantedStart);
+      if (byStart.length === 0) {
+        return {
+          success: false,
+          message: `Nothing starting at ${start}. Candidates: ${matches.map(describeActivity).join("; ")}.`,
+        };
+      }
+      matches = byStart;
+    }
+
+    if (matches.length > 1) {
+      // Listing the times is the whole point: blocks that share a name can
+      // only be told apart by when they meet, and a bare list of names left
+      // the caller with no way to answer its own question.
       return {
         success: false,
-        message: activities.length
-          ? `No activity called "${name}". You have: ${activities.map((a) => a.name).join(", ")}.`
-          : "You have no custom activities in this schedule.",
+        message: `That matches ${matches.length}: ${matches
+          .map(describeActivity)
+          .join("; ")}. Call removeActivity again with days or start to pick one, or removeAllActivities to drop them all.`,
       };
-    }
-    if (matches.length > 1) {
-      return { success: false, message: `That matches several: ${matches.map((a) => a.name).join(", ")}. Which one?` };
     }
 
     const { error } = await supabase
@@ -155,7 +211,35 @@ export const removeActivity = tool({
       .eq("id", matches[0].id)
       .eq("session_id", _sessionId);
     if (error) return { success: false, message: error.message };
-    return { success: true, message: `Removed "${matches[0].name}".` };
+    return { success: true, message: `Removed ${describeActivity(matches[0])}.` };
+  },
+});
+
+export const removeAllActivities = tool({
+  description:
+    "Remove every custom time block from the user's schedule, leaving their courses untouched. Use this for 'remove all my activities' — never clearMySchedule, which also deletes courses.",
+  inputSchema: z.object({}),
+  execute: async () => {
+    const activities = await loadActivities();
+    if (activities.length === 0) {
+      return { success: true, removed: 0, message: "You had no custom activities to remove." };
+    }
+
+    const { error } = await supabase
+      .from("activities")
+      .delete()
+      .eq("session_id", _sessionId)
+      .eq("schedule_slot", _scheduleSlot)
+      .eq("term", _activeTerm);
+    if (error) return { success: false, message: error.message };
+
+    return {
+      success: true,
+      removed: activities.length,
+      message: `Removed ${activities.length} ${activities.length === 1 ? "activity" : "activities"}: ${activities
+        .map(describeActivity)
+        .join("; ")}. Your courses are untouched.`,
+    };
   },
 });
 
