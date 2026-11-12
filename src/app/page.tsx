@@ -2009,17 +2009,39 @@ export default function Home() {
                     }}
                     onClick={() => setSelected(block.course)}
                   >
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeCourse(block.course);
-                      }}
-                      className="absolute top-1 right-1 w-4 h-4 rounded-full flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-black/10 transition-all"
-                      title="Remove"
+                    {/* z-10 is what makes this clickable at all. The code and
+                        title below are flex items, and a flex item paints in
+                        the same layer as a positioned sibling — so the text,
+                        being later in the DOM, was winning the hit test and
+                        the click fell through to the card behind it.
+
+                        Even clickable, the button only earns its place on a
+                        block wide enough to hold it. Sharing a slot halves or
+                        thirds the width, and the section number is shrink-0,
+                        so it ends up directly under the button with nowhere
+                        else to go. A stacked block is removed from the detail
+                        card instead — which is where the hover hint already
+                        sends you. */}
+                    {total === 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeCourse(block.course);
+                        }}
+                        className="absolute top-1 right-1 z-10 w-4 h-4 rounded-full flex items-center justify-center text-[9px] opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-black/10 transition-all"
+                        title="Remove"
+                      >
+                        &#10005;
+                      </button>
+                    )}
+                    {/* pl/pr rather than px: the right side has to clear the
+                        button (right-1 + w-4 = 20px) so the text never slides
+                        under it in the first place. */}
+                    <div
+                      className={`py-1.5 pl-2 h-full flex flex-col ${
+                        total === 1 ? "pr-5" : "pr-2"
+                      }`}
                     >
-                      &#10005;
-                    </button>
-                    <div className="px-2 py-1.5 h-full flex flex-col">
                       <BlockCode
                         code={block.course.offering_name}
                         section={block.course.section_name}
