@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isToolUIPart } from "ai";
 import { SCHEDULE_SLOTS, scheduleSlotLabel } from "@/lib/schedule-slots";
+import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import type { CourseAgentUIMessage } from "@/lib/agents/course-agent";
 import {
   type ScheduledCourse,
@@ -646,10 +647,12 @@ function ChatTab(props: MobileLayoutProps) {
     fetchSchedule,
   } = props;
 
-  const bottomRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  const {
+    scrollRef: chatScrollRef,
+    onScroll: onChatScroll,
+    onWheel: onChatWheel,
+    onTouchMove: onChatTouchMove,
+  } = useStickToBottom(messages, isLoading);
 
   const showLoading =
     isLoading &&
@@ -676,7 +679,13 @@ function ChatTab(props: MobileLayoutProps) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
+      <div
+        ref={chatScrollRef}
+        onScroll={onChatScroll}
+        onWheel={onChatWheel}
+        onTouchMove={onChatTouchMove}
+        className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5"
+      >
         {messages.length === 0 && !isLoading && (
           <div className="px-1 pt-3 space-y-3">
             <p className="text-[13px] text-slate-500 leading-relaxed px-1">
@@ -774,7 +783,6 @@ function ChatTab(props: MobileLayoutProps) {
           </div>
         )}
 
-        <div ref={bottomRef} />
       </div>
 
       {/* Input */}

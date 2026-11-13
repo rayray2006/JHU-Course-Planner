@@ -6,6 +6,7 @@ import { isToolUIPart } from "ai";
 import { useState, useRef, useEffect, useCallback, useMemo, Fragment } from "react";
 import type { CourseAgentUIMessage } from "@/lib/agents/course-agent";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { MobileLayout } from "@/components/MobileLayout";
 import { CURRENT_TERM } from "@/lib/terms";
 import { SCHEDULE_SLOTS, DEFAULT_SCHEDULE_SLOT, parseScheduleSlot, scheduleSlotLabel } from "@/lib/schedule-slots";
@@ -754,7 +755,12 @@ export default function Home() {
     sections?: CourseSection[];
   }
   const [courseDetail, setCourseDetail] = useState<CourseDetail | "loading" | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const {
+    scrollRef: chatScrollRef,
+    onScroll: onChatScroll,
+    onWheel: onChatWheel,
+    onTouchMove: onChatTouchMove,
+  } = useStickToBottom(messages, status === "streaming");
   const panelRef = useRef<HTMLDivElement>(null);
 
   const scheduleFetchId = useRef(0);
@@ -785,10 +791,6 @@ export default function Home() {
     setActivityDraft(null);
     setDrag(null);
   }, []);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   useEffect(() => {
     if (status === "ready") fetchSchedule();
@@ -2656,7 +2658,13 @@ export default function Home() {
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        <div
+          ref={chatScrollRef}
+          onScroll={onChatScroll}
+          onWheel={onChatWheel}
+          onTouchMove={onChatTouchMove}
+          className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
+        >
           {messages.length === 0 && !isLoading && (
             <div className="pt-6 space-y-4">
               <p className="text-[13px] text-slate-500 leading-relaxed">
@@ -2768,7 +2776,6 @@ export default function Home() {
             </div>
           )}
 
-          <div ref={bottomRef} />
         </div>
 
         {/* Input */}
