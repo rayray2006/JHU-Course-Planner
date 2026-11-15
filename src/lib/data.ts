@@ -58,6 +58,63 @@ export async function getPosTags(codes: string[]): Promise<Map<string, string>> 
   return map;
 }
 
+export interface SeatTotals {
+  /** Open seats summed across every section of the course this term. */
+  open: number;
+  /** Capacity summed the same way. */
+  max: number;
+  sections: number;
+}
+
+/**
+ * Seat totals per course code, for the search dropdown.
+ *
+ * This is a second query rather than extra columns on the search itself
+ * because the search returns at most 12 ROWS, and a row is a section. A
+ * course with five sections can easily have two of them in that window, so
+ * summing what the search happened to return would quietly understate a
+ * popular course — exactly the courses where the number matters. Keyed on the
+ * code and counted from every section, the total does not depend on how the
+ * result window fell.
+ *
+ * SIS sends seat counts as strings, and a section with no cap sends an empty
+ * one, so everything is coerced and non-numbers are skipped rather than
+ * turned into a NaN that poisons the sum.
+ *
+ * Supabase only, deliberately — no getDb() branch like its neighbours have.
+ * This annotates rows that the search already pulled from Supabase, and the
+ * local courses.db is an older snapshot, so reading it here puts two sources
+ * in one response: the first run of this had a course reporting 38 open seats
+ * beside its own sections reading 15 and 17.
+ */
+export async function getSeatTotals(
+  codes: string[],
+  term: string,
+): Promise<Map<string, SeatTotals>> {
+  if (codes.length === 0) return new Map();
+
+  const add = (map: Map<string, SeatTotals>, code: string, open: unknown, max: unknown) => {
+    const entry = map.get(code) ?? { open: 0, max: 0, sections: 0 };
+    const o = Number(open);
+    const m = Number(max);
+    if (Number.isFinite(o)) entry.open += o;
+    if (Number.isFinite(m)) entry.max += m;
+    entry.sections += 1;
+    map.set(code, entry);
+  };
+
+  const map = new Map<string, SeatTotals>();
+  const { data } = await supabase
+    .from("courses")
+    .select("offering_name, open_seats, max_seats")
+    .eq("term", term)
+    .in("offering_name", codes)
+    .limit(1000);
+
+  for (const r of data ?? []) add(map, r.offering_name, r.open_seats, r.max_seats);
+  return map;
+}
+
 /** Get POS tags for a single course */
 export async function getCoursePosTags(code: string): Promise<string[]> {
   const db = getDb();

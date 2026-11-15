@@ -1,10 +1,10 @@
 import { supabase } from "@/lib/supabase";
-import { getPosTags, getCataloguePosTags } from "@/lib/data";
+import { getPosTags, getCataloguePosTags, getSeatTotals } from "@/lib/data";
 import { NextRequest, NextResponse } from "next/server";
 import { CURRENT_TERM } from "@/lib/terms";
 
 const COURSE_COLS =
-  "offering_name, section_name, title, credits, meetings, instructors_full_name, department";
+  "offering_name, section_name, title, credits, meetings, instructors_full_name, department, open_seats, max_seats";
 
 /**
  * Merge code matches ahead of title matches, dropping duplicates.
@@ -112,10 +112,18 @@ export async function GET(req: NextRequest) {
 
   if (data.length > 0) {
     const codes = [...new Set(data.map((r) => r.offering_name))];
-    const tagMap = await getPosTags(codes);
+    // Independent lookups, so they overlap rather than paying two round trips.
+    const [tagMap, seatMap] = await Promise.all([
+      getPosTags(codes),
+      getSeatTotals(codes, term),
+    ]);
 
     return NextResponse.json(
-      data.map((r) => ({ ...r, pos_tags: tagMap.get(r.offering_name) || null }))
+      data.map((r) => ({
+        ...r,
+        pos_tags: tagMap.get(r.offering_name) || null,
+        seats: seatMap.get(r.offering_name) ?? null,
+      }))
     );
   }
 

@@ -154,6 +154,30 @@ function formatSlotTime(top: number, height: number, rowH: number): string {
   return `${clock(top)} – ${clock(top + height)}`;
 }
 
+/**
+ * Open seats, summed across a course's sections, on the collapsed search row.
+ *
+ * Whether anything is left is the first thing anyone wants from a result, and
+ * it used to take a click to find out. Full is the case worth colouring: a
+ * number tells you to go ahead, and red tells you not to bother opening it.
+ *
+ * `null` renders nothing rather than "0". Catalogue-only courses — future
+ * terms, before SIS publishes sections — genuinely have no seat data, and a
+ * zero there would read as "full" when it means "not published yet".
+ */
+function SeatBadge({ seats }: { seats?: { open: number; max: number } | null }) {
+  if (!seats) return null;
+  if (seats.open <= 0) {
+    return <span className="text-[9px] font-medium text-red-500">Full</span>;
+  }
+  return (
+    <span className="text-[9px] font-medium text-emerald-600">
+      {seats.open} open
+      {seats.max > 0 && <span className="text-slate-300"> / {seats.max}</span>}
+    </span>
+  );
+}
+
 // --- Color palette (softer, more distinct) ---
 /**
  * Indirect through CSS variables rather than hex, so a block repaints with the
@@ -460,7 +484,7 @@ export default function Home() {
 
   // --- Direct search bar state ---
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<{ offering_name: string; section_name: string; title: string; credits: string; meetings: string; instructors_full_name: string; department?: string; source?: string; pos_tags?: string | null }[]>([]);
+  const [searchResults, setSearchResults] = useState<{ offering_name: string; section_name: string; title: string; credits: string; meetings: string; instructors_full_name: string; department?: string; source?: string; pos_tags?: string | null; open_seats?: number | string | null; max_seats?: number | string | null; seats?: { open: number; max: number; sections: number } | null }[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -1392,7 +1416,10 @@ export default function Home() {
                               </div>
                             )}
                             {canExpand && !isExpanded && (
-                              <div className="text-[9px] text-slate-400">Click to choose section</div>
+                              <div className="text-[9px] text-slate-400 flex items-center gap-1.5">
+                                <span>Click to choose section</span>
+                                <SeatBadge seats={first.seats} />
+                              </div>
                             )}
                             {first.pos_tags && (
                               <div className="flex gap-1 mt-0.5 flex-wrap">
@@ -1425,6 +1452,11 @@ export default function Home() {
                                   <span className="font-mono font-semibold text-slate-500 w-[36px] shrink-0">§{r.section_name}</span>
                                   <span className="text-slate-500 truncate flex-1">{r.meetings || "TBA"}</span>
                                   <span className="text-slate-400 truncate max-w-[120px]">{r.instructors_full_name || "Staff"}</span>
+                                  {/* Per section here, not the course total above: picking a
+                                      section is exactly when the split matters. */}
+                                  <span className="shrink-0 w-[52px] text-right">
+                                    <SeatBadge seats={r.open_seats === null || r.open_seats === undefined ? null : { open: Number(r.open_seats), max: Number(r.max_seats ?? 0) }} />
+                                  </span>
                                   {secInSchedule && <span className="text-[8px] text-emerald-500 font-semibold shrink-0">ADDED</span>}
                                 </button>
                               );
