@@ -36,6 +36,9 @@ interface ScheduledCourse {
   instructors_full_name: string;
   instruction_method: string;
   department: string;
+  /** SIS sends these as strings; optional because past terms predate the sync. */
+  open_seats?: number | string | null;
+  max_seats?: number | string | null;
 }
 
 /**
@@ -52,6 +55,8 @@ function sectionAsCourse(
     location: string | null;
     building: string | null;
     instruction_method: string | null;
+    open_seats?: number | string | null;
+    max_seats?: number | string | null;
   }
 ): ScheduledCourse {
   return {
@@ -62,6 +67,11 @@ function sectionAsCourse(
     location: sec.location ?? "",
     building: sec.building ?? "",
     instruction_method: sec.instruction_method ?? "",
+    // Seats belong to the section, not the course, so they have to be taken
+    // off `sec` — spreading `base` alone would carry the previous section's
+    // count onto the block you are previewing.
+    open_seats: sec.open_seats ?? null,
+    max_seats: sec.max_seats ?? null,
   };
 }
 
@@ -174,6 +184,36 @@ function SeatBadge({ seats }: { seats?: { open: number; max: number } | null }) 
     <span className="text-[9px] font-medium text-emerald-600">
       {seats.open} open
       {seats.max > 0 && <span className="text-slate-300"> / {seats.max}</span>}
+    </span>
+  );
+}
+
+/**
+ * Open seats on a calendar block, for the section that block actually is —
+ * not the course total the search dropdown shows, since by this point a
+ * particular section has been chosen.
+ *
+ * It rides on the title line rather than taking one of its own. A 50-minute
+ * class is about 44px tall at the minimum row height, which a third line does
+ * not fit inside, and the block clips its overflow — so a line of its own
+ * would simply vanish on exactly the short blocks that are most common.
+ *
+ * Inherits the block's own text colour instead of going red when full. Blocks
+ * are already eight different pastels and the palette rotates per course, so
+ * a fixed red lands on backgrounds it was never checked against. Weight
+ * carries "full" here; the search dropdown, which sits on plain white, is
+ * where colour can do that job safely.
+ */
+function BlockSeats({ open }: { open?: number | string | null }) {
+  if (open === null || open === undefined || open === "") return null;
+  const n = Number(open);
+  if (!Number.isFinite(n)) return null;
+  return (
+    <span
+      className={`shrink-0 text-[9px] tabular-nums leading-snug ${n <= 0 ? "font-bold opacity-90" : "font-medium opacity-60"}`}
+      title={n <= 0 ? "No open seats" : `${n} open seat${n === 1 ? "" : "s"}`}
+    >
+      {n <= 0 ? "FULL" : n}
     </span>
   );
 }
@@ -2081,12 +2121,15 @@ export default function Home() {
                         section={block.course.section_name}
                         className="text-[10px] font-bold leading-none"
                       />
-                      <span className="text-[10px] leading-snug truncate mt-0.5 opacity-80 group-hover:hidden">
-                        {block.course.title}
-                      </span>
-                      <span className="text-[10px] leading-snug truncate mt-0.5 opacity-90 hidden group-hover:block font-medium">
-                        Click for info
-                      </span>
+                      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
+                        <span className="flex-1 min-w-0 text-[10px] leading-snug truncate opacity-80 group-hover:hidden">
+                          {block.course.title}
+                        </span>
+                        <span className="flex-1 min-w-0 text-[10px] leading-snug truncate opacity-90 hidden group-hover:block font-medium">
+                          Click for info
+                        </span>
+                        <BlockSeats open={block.course.open_seats} />
+                      </div>
                     </div>
                   </div>
                 );

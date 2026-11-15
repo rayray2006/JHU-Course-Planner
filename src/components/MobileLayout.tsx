@@ -471,6 +471,20 @@ function CourseCard({
               <span>{course.instructors_full_name}</span>
             </>
           )}
+          {(() => {
+            // Colour is safe here, unlike on a calendar block: this card is
+            // white, not one of eight rotating pastels.
+            const n = Number(course.open_seats);
+            if (course.open_seats === null || course.open_seats === undefined || !Number.isFinite(n)) return null;
+            return (
+              <>
+                <span className="mx-1.5 text-slate-300">·</span>
+                <span className={n <= 0 ? "font-semibold text-red-500" : "font-medium text-emerald-600"}>
+                  {n <= 0 ? "Full" : `${n} open`}
+                </span>
+              </>
+            );
+          })()}
         </div>
       </div>
     </button>
