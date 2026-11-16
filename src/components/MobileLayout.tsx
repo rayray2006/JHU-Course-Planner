@@ -580,15 +580,15 @@ function SearchSheet({
         />
       </header>
       <div className="flex-1 overflow-y-auto">
-        {searchQuery.length < 2 && (
+        {searchQuery.trim().length < 2 && (
           <div className="px-6 py-12 text-center text-[12px] text-slate-400">
             Type at least 2 characters to search.
           </div>
         )}
-        {searchQuery.length >= 2 && searchLoading && (
+        {searchQuery.trim().length >= 2 && searchLoading && (
           <div className="px-6 py-12 text-center text-[12px] text-slate-400">Searching…</div>
         )}
-        {searchQuery.length >= 2 && !searchLoading && searchResults.length === 0 && (
+        {searchQuery.trim().length >= 2 && !searchLoading && searchResults.length === 0 && (
           <div className="px-6 py-12 text-center text-[12px] text-slate-400">No courses found.</div>
         )}
         <ul className="divide-y divide-slate-100">

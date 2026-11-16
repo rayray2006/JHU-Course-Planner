@@ -34,7 +34,11 @@ function merge<T extends { offering_name: string; section_name?: string }>(
 }
 
 export async function GET(req: NextRequest) {
-  const q = req.nextUrl.searchParams.get("q") || "";
+  // Pasted course codes routinely arrive with a trailing space, a newline, or
+  // the non-breaking space a catalogue page puts in — and "%EN.601.226 %"
+  // matches nothing, so the search went empty with no sign of why. JavaScript's
+  // \s covers U+00A0, so this catches the paste cases as well as plain spaces.
+  const q = (req.nextUrl.searchParams.get("q") || "").replace(/\s+/g, " ").trim();
   const term = req.nextUrl.searchParams.get("term") || CURRENT_TERM;
   const mode = req.nextUrl.searchParams.get("mode") || "term"; // "term" | "past" | "catalogue"
 

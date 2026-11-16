@@ -454,13 +454,28 @@ export default function Home() {
     };
   }, [openCrowded]);
 
+  // What the chat should be told about on its next message. useChat builds its
+  // Chat object from the options of the FIRST render and only rebuilds it when
+  // `id` or an explicit `chat` changes — handing it a freshly constructed
+  // transport does nothing. So the body cannot be a value captured at mount:
+  // it froze at Schedule 1 (the server-rendered default, since the stored slot
+  // is restored in an effect that runs after the first render), and switching
+  // schedules left the agent reading and writing Schedule 1 no matter which
+  // one was on screen. Selected programs went stale the same way.
+  const chatBody = useRef({ activeTerm, selectedPrograms, scheduleSlot: activeSlot });
+  useEffect(() => {
+    chatBody.current = { activeTerm, selectedPrograms, scheduleSlot: activeSlot };
+  }, [activeTerm, selectedPrograms, activeSlot]);
+
   const chatTransport = useMemo(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: { activeTerm, selectedPrograms, scheduleSlot: activeSlot },
+        // `body` is Resolvable: the transport awaits it on every request, so a
+        // function here is read at send time rather than at construction.
+        body: () => chatBody.current,
       }),
-    [activeTerm, selectedPrograms, activeSlot]
+    []
   );
 
   const { messages, sendMessage, setMessages, status, error } = useChat<CourseAgentUIMessage>({
@@ -509,10 +524,13 @@ export default function Home() {
 
   // Debounced search via API
   const doSearch = useCallback(async (q: string) => {
-    if (q.length < 2) { setSearchResults([]); return; }
+    // Same normalisation the route applies, so the length test below counts
+    // the characters that will actually be searched for.
+    const query = q.replace(/\s+/g, " ").trim();
+    if (query.length < 2) { setSearchResults([]); return; }
     setSearchLoading(true);
     try {
-      const res = await fetch(`/api/course-search?q=${encodeURIComponent(q)}&term=${encodeURIComponent(activeTerm)}&mode=term`);
+      const res = await fetch(`/api/course-search?q=${encodeURIComponent(query)}&term=${encodeURIComponent(activeTerm)}&mode=term`);
       if (res.ok) setSearchResults(await res.json());
       else setSearchResults([]);
     } catch { setSearchResults([]); }
@@ -521,7 +539,7 @@ export default function Home() {
 
   useEffect(() => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    if (searchQuery.length < 2) { setSearchResults([]); setExpandedSearchCourse(null); return; }
+    if (searchQuery.trim().length < 2) { setSearchResults([]); setExpandedSearchCourse(null); return; }
     searchTimerRef.current = setTimeout(() => doSearch(searchQuery), 250);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [searchQuery, doSearch]);
