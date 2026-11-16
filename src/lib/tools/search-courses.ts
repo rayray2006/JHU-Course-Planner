@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { supabase } from "../supabase";
 import { getActiveTerm } from "./schedule-tools";
+import { seatNumber } from "../live-seats";
 import {
   blocksOverlap,
   expandDays,
@@ -322,6 +323,13 @@ async function searchCoursesExecute(input: any) {
       // Only include optional fields when they have values
       if (row.status !== "Open") r.status = row.status;
       if (row.open_seats !== undefined) r.open_seats = row.open_seats;
+      // The column was always selected but never reached the model, so asked
+      // how many people were queued for a full section it could only say it
+      // had no idea. SIS sends "N/A" where a section has no waitlist, which
+      // seatNumber turns into nothing rather than a misleading 0.
+      if (row.max_seats !== undefined) r.max_seats = row.max_seats;
+      const waiting = seatNumber(row.waitlisted);
+      if (waiting !== null) r.waitlisted = waiting;
       if (row.is_writing_intensive === "Yes") r.writing_intensive = true;
       if (row.areas) r.areas = row.areas;
       if (row.pos_tags) r.pos_tags = row.pos_tags;

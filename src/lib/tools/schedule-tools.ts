@@ -5,6 +5,7 @@ import { CURRENT_TERM } from "../terms";
 import { DEFAULT_SCHEDULE_SLOT, parseScheduleSlot } from "../schedule-slots";
 import { expandDays, hasConflict, parseMeetingTimes } from "../meeting-time";
 import { activityMeetings, minutesToLabel, normalizeDays, parseTimeInput, validateActivity, type Activity } from "../activities";
+import { fetchLiveSeats, seatNumber } from "../live-seats";
 
 // Session ID is passed via a global that the API route sets before each request
 let _sessionId = "default";
@@ -274,16 +275,55 @@ export const viewSchedule = tool({
 
     const { data: courses } = await supabase
       .from("courses")
-      .select("offering_name, section_name, title, credits, meetings, instructors_full_name")
+      .select(
+        "offering_name, section_name, title, credits, meetings, instructors_full_name, status, open_seats, max_seats, waitlisted",
+      )
       .eq("term", _activeTerm)
       .or(orFilter);
 
-    const totalCredits = (courses || []).reduce((sum, c) => {
+    // Seats and waitlists are the part of this answer that goes stale within
+    // hours, and "how full is what I picked" is one of the things most worth
+    // asking. A schedule is a handful of courses, so the live lookup is a
+    // handful of requests — and anything SIS will not answer for keeps the
+    // stored numbers rather than dropping out of the reply.
+    const live = await fetchLiveSeats(
+      [...new Set((courses || []).map((c) => c.offering_name))],
+      _activeTerm,
+    );
+
+    const withSeats = (courses || []).map((c) => {
+      const l = live.courses[c.offering_name]?.[c.section_name];
+      const open = seatNumber(l ? l.open_seats : c.open_seats);
+      const max = seatNumber(l ? l.max_seats : c.max_seats);
+      // SIS sends "N/A" for a section that has no waitlist, which is a real
+      // answer — nobody is waiting — so it is reported as 0 rather than
+      // omitted, or the model has to hedge about what it does not know.
+      const waitlisted = seatNumber(l ? l.waitlisted : c.waitlisted) ?? 0;
+      return {
+        ...c,
+        status: l?.status ?? c.status,
+        open_seats: open,
+        max_seats: max,
+        waitlisted,
+        seats_live: Boolean(l),
+      };
+    });
+
+    const totalCredits = withSeats.reduce((sum, c) => {
       const n = parseFloat(c.credits);
       return sum + (isNaN(n) ? 0 : n);
     }, 0);
 
-    return { courses: courses || [], activities: activityList, totalCredits, count: (courses || []).length, term: _activeTerm };
+    return {
+      courses: withSeats,
+      activities: activityList,
+      totalCredits,
+      count: withSeats.length,
+      term: _activeTerm,
+      seatsNote:
+        "open_seats/max_seats/waitlisted are counts; waitlisted is how many students are queued. " +
+        "seats_live is true where the numbers came from SIS just now, false where they are from the last sync.",
+    };
   },
 });
 
@@ -398,7 +438,7 @@ async function findNonConflictingExecute(input: any) {
     // 2. Search for candidate courses in current term
     let query = supabase
       .from("courses")
-      .select("offering_name, section_name, title, credits, meetings, instructors_full_name, overall_quality, workload, is_writing_intensive, areas, pos_tags, school_name, open_seats, prerequisites, instructor_effectiveness, intellectual_challenge, num_respondents, status")
+      .select("offering_name, section_name, title, credits, meetings, instructors_full_name, overall_quality, workload, is_writing_intensive, areas, pos_tags, school_name, open_seats, max_seats, waitlisted, prerequisites, instructor_effectiveness, intellectual_challenge, num_respondents, status")
       .eq("term", _activeTerm)
       .neq("status", "Canceled")
       .neq("meetings", "");
@@ -605,6 +645,13 @@ async function findNonConflictingExecute(input: any) {
     return {
       count: nonConflicting.length,
       scheduledCount: scheduleEmpty ? 0 : scheduleRows!.length,
-      courses: nonConflicting,
+      // Raw rows carry the waitlist as SIS writes it, including the literal
+      // "N/A" for a section that has no waitlist. Normalising here keeps that
+      // string out of the model's context, where it reads as a number it
+      // cannot parse rather than as "nobody is queued".
+      courses: nonConflicting.map((c) => {
+        const waiting = seatNumber(c.waitlisted);
+        return { ...c, waitlisted: waiting ?? 0 };
+      }),
     };
 }
