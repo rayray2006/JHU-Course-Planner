@@ -213,6 +213,14 @@ type LiveSeats = Record<
  * so moving between sections of the same course reuses what is on screen
  * rather than blanking the column to ask again.
  */
+/**
+ * The "we looked and there is nobody" result, as one stable array.
+ *
+ * A fresh [] each render would make the derived ratings value a new object
+ * every time and defeat any memo downstream of it.
+ */
+const NO_RATINGS: never[] = [];
+
 function useLiveSeats(code: string | null, term: string) {
   // What was fetched, tagged with what it was fetched for. Holding the key
   // alongside the data means the hook never has to reset itself when the
@@ -850,7 +858,20 @@ export default function Home() {
       would_take_again_pct: number | null;
     } | null;
   }
-  const [profRatings, setProfRatings] = useState<ProfRatingResult[] | "loading" | null>(null);
+  // Ratings are keyed by the instructor they were fetched for and the loading
+  // state is derived during render, not stored. Storing it would mean an
+  // effect had to set it, and an effect runs after the paint that follows the
+  // click — so the card would flash "No data available" for a frame before
+  // admitting it was still loading.
+  const [profState, setProfState] = useState<{ key: string; data: ProfRatingResult[] } | null>(null);
+  const profName = selected?.instructors_full_name;
+  /** "" when there is nobody to look up, so the card can say so without a fetch. */
+  const profKey = selected ? (profName && profName !== "Staff" ? profName : "") : null;
+  const profRatings: ProfRatingResult[] | "loading" | null =
+    profKey === null ? null
+      : profKey === "" ? NO_RATINGS
+      : profState?.key === profKey ? profState.data
+      : "loading";
   interface CourseSection {
     section_name: string;
     meetings: string | null;
@@ -883,7 +904,17 @@ export default function Home() {
     areas?: string | null;
     sections?: CourseSection[];
   }
-  const [courseDetail, setCourseDetail] = useState<CourseDetail | "loading" | null>(null);
+  // Keyed the same way, for the same reason. It also means switching to
+  // another section of the same course re-uses what is already on screen: the
+  // description, evaluations, POS tags and section list belong to the course,
+  // not the section, so the key does not change and nothing is re-fetched.
+  const [detailState, setDetailState] = useState<{ key: string; data: CourseDetail | null } | null>(null);
+  const detailCode = selected?.offering_name ?? null;
+  const detailKey = detailCode ? `${activeTerm}|${detailCode}` : null;
+  const courseDetail: CourseDetail | "loading" | null =
+    detailKey === null ? null
+      : detailState?.key === detailKey ? detailState.data
+      : "loading";
 
   const { seats: liveSeats, status: liveSeatsStatus } = useLiveSeats(
     selected?.offering_name ?? null,
@@ -946,8 +977,6 @@ export default function Home() {
         const target = e.target as HTMLElement;
         if (target.closest("[data-course-block]")) return;
         setSelected(null);
-        setProfRatings(null);
-        setCourseDetail(null);
       }
     }
     const id = setTimeout(() => document.addEventListener("mousedown", handleClick), 0);
@@ -959,8 +988,6 @@ export default function Home() {
 
   // Fetch professor ratings and course detail when a course is selected.
   // Keep old data visible until new data is ready (no flash).
-  const [panelReady, setPanelReady] = useState(false);
-  const loadedOffering = useRef<string | null>(null);
   const [switchingSection, setSwitchingSection] = useState<string | null>(null);
   const [sendingToSis, setSendingToSis] = useState(false);
   const [sisError, setSisError] = useState<string | null>(null);
@@ -1035,49 +1062,40 @@ export default function Home() {
       setSendingToSis(false);
     }
   }, [activeTerm, activeSlot]);
+  // Fills the card. Everything here is enrichment — the row that was clicked
+  // already carries the title, credits, meetings, instructor and status — so
+  // nothing in it gates the card appearing. Each request lands on its own and
+  // paints its own block: waiting on both together made opening a card cost
+  // the slower of two unrelated round trips for data that is only ever part
+  // of the card.
   useEffect(() => {
-    if (!selected) {
-      setProfRatings(null);
-      setCourseDetail(null);
-      setPanelReady(false);
-      loadedOffering.current = null;
-      return;
-    }
-
+    if (!profKey) return;
     let cancelled = false;
-    // Switching to another section of the same course keeps the panel up:
-    // tearing it down and rebuilding it makes the card jump out from under
-    // the click that asked for the switch. A different course still blanks it,
-    // because then everything on screen is about to be wrong.
-    if (loadedOffering.current !== selected.offering_name) {
-      setPanelReady(false);
-      loadedOffering.current = selected.offering_name;
-    }
+    fetch(`/api/professor?name=${encodeURIComponent(profKey)}`)
+      .then((r) => r.json())
+      .then((data: ProfRatingResult[]) => {
+        if (!cancelled) setProfState({ key: profKey, data: data || NO_RATINGS });
+      })
+      .catch(() => { if (!cancelled) setProfState({ key: profKey, data: NO_RATINGS }); });
+    return () => { cancelled = true; };
+  }, [profKey]);
 
-    const profPromise: Promise<ProfRatingResult[]> = (() => {
-      const name = selected.instructors_full_name;
-      if (!name || name === "Staff") return Promise.resolve([]);
-      return fetch(`/api/professor?name=${encodeURIComponent(name)}`)
-        .then((r) => r.json())
-        .catch(() => []);
-    })();
-
-    const detailPromise: Promise<CourseDetail | null> = fetch(
-      `/api/course-detail?code=${encodeURIComponent(selected.offering_name)}&term=${encodeURIComponent(activeTerm)}`
+  // Deliberately keyed on the course code, not on `selected`: a section switch
+  // changes the selection but not the course, and re-fetching the same payload
+  // to redraw the same panel is a round trip nobody asked for.
+  useEffect(() => {
+    if (!detailKey || !detailCode) return;
+    let cancelled = false;
+    fetch(
+      `/api/course-detail?code=${encodeURIComponent(detailCode)}&term=${encodeURIComponent(activeTerm)}`
     )
       .then((r) => r.json())
-      .then((data: CourseDetail | null) => data || null)
-      .catch(() => null);
-
-    Promise.all([profPromise, detailPromise]).then(([prof, detail]) => {
-      if (cancelled) return;
-      setProfRatings(prof);
-      setCourseDetail(detail);
-      setPanelReady(true);
-    });
-
+      .then((data: CourseDetail | null) => {
+        if (!cancelled) setDetailState({ key: detailKey, data: data || null });
+      })
+      .catch(() => { if (!cancelled) setDetailState({ key: detailKey, data: null }); });
     return () => { cancelled = true; };
-  }, [selected, activeTerm]);
+  }, [detailKey, detailCode, activeTerm]);
 
   const isActive = status === "submitted" || status === "streaming";
 
@@ -2405,7 +2423,7 @@ export default function Home() {
           })()}
 
           {/* Course detail panel */}
-          {selected && panelReady && (
+          {selected && (
             <div
               ref={panelRef}
               // The panel covers the bottom of the week, which is exactly
@@ -2441,7 +2459,7 @@ export default function Home() {
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ offering_name: selected.offering_name, section_name: selected.section_name, term: activeTerm, slot: activeSlot }),
                         });
-                        setSelected(null); setProfRatings(null); setCourseDetail(null);
+                        setSelected(null);
                         fetchSchedule();
                       }}
                       className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-red-50 text-red-500 hover:bg-red-100 transition-colors"
@@ -2449,7 +2467,7 @@ export default function Home() {
                       Remove
                     </button>
                     <button
-                      onClick={() => { setSelected(null); setProfRatings(null); setCourseDetail(null); }}
+                      onClick={() => { setSelected(null); }}
                       className="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors text-xs"
                     >
                       &#10005;
@@ -2498,6 +2516,12 @@ export default function Home() {
                     </div>
 
                     {/* Sections — which one you're in, and the others */}
+                    {courseDetail === "loading" && (
+                      <div>
+                        <span className="text-[11px] text-slate-400">Sections</span>
+                        <p className="text-[12px] text-slate-400 mt-0.5">Loading...</p>
+                      </div>
+                    )}
                     {courseDetail && courseDetail !== "loading" && (courseDetail.sections?.length ?? 0) > 0 && (
                       <div>
                         <span className="text-[11px] text-slate-400">
