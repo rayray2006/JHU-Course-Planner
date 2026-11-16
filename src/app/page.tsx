@@ -786,9 +786,12 @@ export default function Home() {
     meetings: string | null;
     instructors_full_name: string | null;
     status: string | null;
-    open_seats: number | null;
-    max_seats: number | null;
-    waitlisted: number | null;
+    // SIS sends these as strings, and literally "N/A" for a section with no
+    // waitlist, so they go through seatCount rather than being trusted as
+    // numbers.
+    open_seats: number | string | null;
+    max_seats: number | string | null;
+    waitlisted: number | string | null;
     location: string | null;
     building: string | null;
     instruction_method: string | null;
@@ -2423,12 +2426,15 @@ export default function Home() {
                           {courseDetail.sections!.map((sec) => {
                             const current = sec.section_name === selected.section_name;
                             const busy = switchingSection === sec.section_name;
+                            // "0/18 +16" meant nothing without being told what
+                            // the parts were, so each number now says what it
+                            // counts. seatCount on all three because a section
+                            // with no waitlist comes back as the string "N/A",
+                            // which a bare null check lets through.
+                            const secOpen = seatCount(sec.open_seats);
+                            const secMax = seatCount(sec.max_seats);
                             const secWl = seatCount(sec.waitlisted) ?? 0;
-                            const seats =
-                              sec.open_seats !== null && sec.max_seats !== null
-                                ? `${sec.open_seats}/${sec.max_seats}` +
-                                  (secWl > 0 ? ` +${secWl}` : "")
-                                : null;
+                            const hasSeats = secOpen !== null && secMax !== null;
                             return (
                               <button
                                 key={sec.section_name}
@@ -2465,18 +2471,29 @@ export default function Home() {
                                     {sec.instructors_full_name || "Staff"}
                                   </span>
                                 </span>
-                                {seats && (
+                                {hasSeats && (
                                   <span
-                                    className={`shrink-0 text-[10px] ${
-                                      sec.open_seats === 0 ? "text-red-400" : "text-slate-400"
-                                    }`}
+                                    className="shrink-0 text-right leading-[1.35]"
                                     title={
-                                      sec.waitlisted
-                                        ? `${sec.waitlisted} on the waitlist`
-                                        : "Open seats / capacity"
+                                      `${secOpen} of ${secMax} seats open` +
+                                      (secWl > 0 ? `, ${secWl} on the waitlist` : "")
                                     }
                                   >
-                                    {seats}
+                                    {/* tabular-nums so the counts line up down
+                                        the list instead of drifting with the
+                                        width of each digit. */}
+                                    <span
+                                      className={`block text-[10px] font-medium tabular-nums ${
+                                        secOpen === 0 ? "text-red-500" : "text-emerald-600"
+                                      }`}
+                                    >
+                                      {secOpen}/{secMax} open
+                                    </span>
+                                    {secWl > 0 && (
+                                      <span className="block text-[9px] tabular-nums text-amber-600">
+                                        {secWl} waitlisted
+                                      </span>
+                                    )}
                                   </span>
                                 )}
                                 <span className="shrink-0 w-12 text-right text-[10px] font-medium">
