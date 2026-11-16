@@ -39,6 +39,7 @@ interface ScheduledCourse {
   /** SIS sends these as strings; optional because past terms predate the sync. */
   open_seats?: number | string | null;
   max_seats?: number | string | null;
+  waitlisted?: number | string | null;
 }
 
 /**
@@ -57,6 +58,7 @@ function sectionAsCourse(
     instruction_method: string | null;
     open_seats?: number | string | null;
     max_seats?: number | string | null;
+    waitlisted?: number | string | null;
   }
 ): ScheduledCourse {
   return {
@@ -72,6 +74,7 @@ function sectionAsCourse(
     // count onto the block you are previewing.
     open_seats: sec.open_seats ?? null,
     max_seats: sec.max_seats ?? null,
+    waitlisted: sec.waitlisted ?? null,
   };
 }
 
@@ -189,14 +192,42 @@ function SeatBadge({ seats }: { seats?: { open: number; max: number } | null }) 
 }
 
 /**
- * Open seats on a calendar block, for the section that block actually is —
- * not the course total the search dropdown shows, since by this point a
- * particular section has been chosen.
+ * A seat count off a SIS row, as a number or nothing.
  *
- * It rides on the title line rather than taking one of its own. A 50-minute
- * class is about 44px tall at the minimum row height, which a third line does
- * not fit inside, and the block clips its overflow — so a line of its own
- * would simply vanish on exactly the short blocks that are most common.
+ * SIS sends these as strings, and sends nothing at all for a term whose
+ * sections are not published yet. Anything that is not a finite number comes
+ * back as null rather than 0, because the caller's job is to draw nothing in
+ * that case — a 0 would read as "full" when it means "not published yet".
+ */
+function seatCount(v?: number | string | null): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Seats on a calendar block, for the section that block actually is — not the
+ * course total the search dropdown shows, since by this point a particular
+ * section has been chosen.
+ *
+ * Reads open/capacity, the same shape as the section list on the detail card,
+ * so switching between the two does not mean reading two different formats.
+ * A full section with people queued behind it gets "+N" after the count;
+ * every section carries a waitlist field, but almost all of them sit at 0,
+ * and drawing that would spend a block's scarcest resource on nothing.
+ *
+ * It is pinned to the block's bottom-right corner and taken out of the text
+ * flow, so it costs the course code and the title nothing. Sharing a line
+ * with either of them means one of them truncates to pay for it, and
+ * open/capacity plus a waitlist is wide enough that the code was losing
+ * ("AS.020.319" down to "A…") on a block in a two-lane stack — the code is
+ * the one thing on a block that cannot be guessed from context.
+ *
+ * A line of its own in normal flow is not an option either: a 50-minute class
+ * is about 43px tall at the minimum row height, which three lines do not fit
+ * inside, and the block clips its overflow — so the count would vanish on
+ * exactly the short blocks that are most common. Pinned, it merely overlaps
+ * the title's line box there, which `tightBlock` pads around.
  *
  * Inherits the block's own text colour instead of going red when full. Blocks
  * are already eight different pastels and the palette rotates per course, so
@@ -204,16 +235,38 @@ function SeatBadge({ seats }: { seats?: { open: number; max: number } | null }) 
  * carries "full" here; the search dropdown, which sits on plain white, is
  * where colour can do that job safely.
  */
-function BlockSeats({ open }: { open?: number | string | null }) {
-  if (open === null || open === undefined || open === "") return null;
-  const n = Number(open);
-  if (!Number.isFinite(n)) return null;
+function BlockSeats({
+  open,
+  max,
+  waitlisted,
+  compact,
+}: {
+  open?: number | string | null;
+  max?: number | string | null;
+  waitlisted?: number | string | null;
+  /** Three or more blocks in one slot: a lane is then about 35px wide, which
+   *  "0/18 +16" overruns and the block clips from the left — losing the open
+   *  count, the half that matters most. The waitlist drops instead; it is
+   *  still in the tooltip and on the detail card's section list. */
+  compact?: boolean;
+}) {
+  const n = seatCount(open);
+  if (n === null) return null;
+  const cap = seatCount(max);
+  const wl = compact ? 0 : seatCount(waitlisted) ?? 0;
+  const wlAll = seatCount(waitlisted) ?? 0;
   return (
     <span
-      className={`shrink-0 text-[9px] tabular-nums leading-snug ${n <= 0 ? "font-bold opacity-90" : "font-medium opacity-60"}`}
-      title={n <= 0 ? "No open seats" : `${n} open seat${n === 1 ? "" : "s"}`}
+      className={`absolute bottom-1 right-2 text-[9px] tabular-nums leading-none whitespace-nowrap ${
+        n <= 0 ? "font-bold opacity-90" : "font-medium opacity-60"
+      }`}
+      title={
+        `${n} of ${cap ?? "?"} seats open` +
+        (wlAll > 0 ? ` · ${wlAll} on the waitlist` : "")
+      }
     >
-      {n <= 0 ? "FULL" : n}
+      {cap === null || cap <= 0 ? n : `${n}/${cap}`}
+      {wl > 0 && <span className="font-semibold">{` +${wl}`}</span>}
     </span>
   );
 }
@@ -1984,6 +2037,10 @@ export default function Home() {
               {/* Course blocks */}
               {placedBlocks.map(({ block, lane: idx, lanes: total }) => {
                 const pal = colorOf(block.course);
+                // A 50-minute class is about 43px tall, which leaves no
+                // room under the title for the corner seat count. Below this
+                // the title reserves width for it instead.
+                const tightBlock = block.height < 52;
 
                 if (block.isPreview) {
                   return (
@@ -2121,16 +2178,25 @@ export default function Home() {
                         section={block.course.section_name}
                         className="text-[10px] font-bold leading-none"
                       />
-                      <div className="flex items-baseline gap-1 mt-0.5 min-w-0">
-                        <span className="flex-1 min-w-0 text-[10px] leading-snug truncate opacity-80 group-hover:hidden">
+                      {/* The seat count is pinned to the bottom-right corner,
+                          and on a block too short to give it a line of its own
+                          it lands on the title's line box. Reserving the width
+                          here keeps it off the words rather than moving it. */}
+                      <div className={`mt-0.5 min-w-0 ${tightBlock ? "pr-9" : ""}`}>
+                        <span className="block text-[10px] leading-snug truncate opacity-80 group-hover:hidden">
                           {block.course.title}
                         </span>
-                        <span className="flex-1 min-w-0 text-[10px] leading-snug truncate opacity-90 hidden group-hover:block font-medium">
+                        <span className="block text-[10px] leading-snug truncate opacity-90 hidden group-hover:block font-medium">
                           Click for info
                         </span>
-                        <BlockSeats open={block.course.open_seats} />
                       </div>
                     </div>
+                    <BlockSeats
+                      open={block.course.open_seats}
+                      max={block.course.max_seats}
+                      waitlisted={block.course.waitlisted}
+                      compact={total >= 3}
+                    />
                   </div>
                 );
               })}
@@ -2434,9 +2500,11 @@ export default function Home() {
                           {courseDetail.sections!.map((sec) => {
                             const current = sec.section_name === selected.section_name;
                             const busy = switchingSection === sec.section_name;
+                            const secWl = seatCount(sec.waitlisted) ?? 0;
                             const seats =
                               sec.open_seats !== null && sec.max_seats !== null
-                                ? `${sec.open_seats}/${sec.max_seats}`
+                                ? `${sec.open_seats}/${sec.max_seats}` +
+                                  (secWl > 0 ? ` +${secWl}` : "")
                                 : null;
                             return (
                               <button

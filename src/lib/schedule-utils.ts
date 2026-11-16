@@ -14,6 +14,7 @@ export interface ScheduledCourse {
   /** SIS sends these as strings; optional because past terms predate the sync. */
   open_seats?: number | string | null;
   max_seats?: number | string | null;
+  waitlisted?: number | string | null;
 }
 
 export const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"];

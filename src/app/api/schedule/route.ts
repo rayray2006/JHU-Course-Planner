@@ -5,7 +5,7 @@ import { resolveSessionId } from "@/lib/session";
 import { SCHEDULE_SLOTS, parseScheduleSlot } from "@/lib/schedule-slots";
 
 const COURSE_COLS =
-  "offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level, open_seats, max_seats";
+  "offering_name, section_name, title, credits, meetings, location, building, instructors_full_name, instruction_method, department, status, school_name, level, open_seats, max_seats, waitlisted";
 
 export async function GET(req: NextRequest) {
   const sessionId = await resolveSessionId();
