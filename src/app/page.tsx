@@ -192,6 +192,70 @@ function seatCount(v?: number | string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Seats for one course's sections, keyed by section name. */
+type LiveSeats = Record<
+  string,
+  { open_seats: string | null; max_seats: string | null; waitlisted: string | null }
+>;
+
+/**
+ * Seats read from SIS a moment ago, to lay over the stored ones.
+ *
+ * Everything the app draws comes from a table a cron refreshes once a day —
+ * the most a Hobby plan allows — so during registration week those numbers can
+ * be hours old, and the places that show them are exactly where someone
+ * decides whether a section is worth registering for. This never gates the
+ * render: the caller paints stored values immediately and swaps these in when
+ * they arrive, so a slow SIS costs nothing and an unreachable one leaves the
+ * page exactly as it was.
+ *
+ * One course per call, because SIS has no batch endpoint. Keyed on the code,
+ * so moving between sections of the same course reuses what is on screen
+ * rather than blanking the column to ask again.
+ */
+function useLiveSeats(code: string | null, term: string) {
+  // What was fetched, tagged with what it was fetched for. Holding the key
+  // alongside the data means the hook never has to reset itself when the
+  // course changes: a result whose key no longer matches is simply not this
+  // course's answer, and the states below fall out of that comparison during
+  // the render rather than from an effect writing state back.
+  const [result, setResult] = useState<{ key: string; seats: LiveSeats | null } | null>(null);
+  const key = code ? `${term}|${code}` : null;
+
+  useEffect(() => {
+    if (!code) return;
+    let cancelled = false;
+    const fetchedFor = `${term}|${code}`;
+    fetch(`/api/seats?codes=${encodeURIComponent(code)}&term=${encodeURIComponent(term)}`)
+      .then((r) => r.json())
+      .then((data: { courses?: Record<string, LiveSeats> }) => {
+        if (cancelled) return;
+        const sections = data?.courses?.[code];
+        // Nothing back means SIS had nothing to say about this course — a past
+        // term, or a code it does not recognise. Stored values stand.
+        const usable = sections && Object.keys(sections).length > 0 ? sections : null;
+        setResult({ key: fetchedFor, seats: usable });
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ key: fetchedFor, seats: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, term]);
+
+  const current = result && result.key === key ? result : null;
+  const status: "idle" | "loading" | "live" | "stored" = !code
+    ? "idle"
+    : !current
+      ? "loading"
+      : current.seats
+        ? "live"
+        : "stored";
+
+  return { seats: current?.seats ?? null, status };
+}
+
 // --- Color palette (softer, more distinct) ---
 /**
  * Indirect through CSS variables rather than hex, so a block repaints with the
@@ -519,6 +583,12 @@ export default function Home() {
   const searchRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [expandedSearchCourse, setExpandedSearchCourse] = useState<string | null>(null);
+  // Expanding a result is the same question the detail card answers — which
+  // section still has room — so it gets the same live numbers, and at the same
+  // cost of one lookup. The collapsed list above it deliberately does not:
+  // twelve rows would be twelve upstream requests to decorate a list someone
+  // is still skimming.
+  const { seats: expandedLiveSeats } = useLiveSeats(expandedSearchCourse, activeTerm);
   const [expandedSections, setExpandedSections] = useState<typeof searchResults>([]);
   const [expandedLoading, setExpandedLoading] = useState(false);
 
@@ -814,6 +884,11 @@ export default function Home() {
     sections?: CourseSection[];
   }
   const [courseDetail, setCourseDetail] = useState<CourseDetail | "loading" | null>(null);
+
+  const { seats: liveSeats, status: liveSeatsStatus } = useLiveSeats(
+    selected?.offering_name ?? null,
+    activeTerm,
+  );
   const {
     scrollRef: chatScrollRef,
     onScroll: onChatScroll,
@@ -1490,7 +1565,16 @@ export default function Home() {
                                   {/* Per section here, not the course total above: picking a
                                       section is exactly when the split matters. */}
                                   <span className="shrink-0 w-[52px] text-right">
-                                    <SeatBadge seats={r.open_seats === null || r.open_seats === undefined ? null : { open: Number(r.open_seats), max: Number(r.max_seats ?? 0) }} />
+                                    {(() => {
+                                      // Live where SIS answered for this
+                                      // section, stored otherwise, so a
+                                      // section added since the last sync
+                                      // still shows the number we have.
+                                      const live = expandedLiveSeats?.[r.section_name];
+                                      const open = seatCount(live ? live.open_seats : r.open_seats);
+                                      const max = seatCount(live ? live.max_seats : r.max_seats) ?? 0;
+                                      return <SeatBadge seats={open === null ? null : { open, max }} />;
+                                    })()}
                                   </span>
                                   {secInSchedule && <span className="text-[8px] text-emerald-500 font-semibold shrink-0">ADDED</span>}
                                 </button>
@@ -2421,6 +2505,23 @@ export default function Home() {
                           {courseDetail.sections!.length > 1 && (
                             <span className="text-slate-300"> · click to switch</span>
                           )}
+                          {/* Says where the seat numbers came from. Without
+                              it, a stored number and a just-fetched one look
+                              identical, and the whole point of the fetch is
+                              that they may not be. */}
+                          {liveSeatsStatus === "loading" && (
+                            <span className="text-slate-300"> · checking seats…</span>
+                          )}
+                          {liveSeatsStatus === "live" && (
+                            <span className="text-emerald-600">
+                              {" · "}
+                              <span className="inline-block w-1 h-1 mb-px rounded-full bg-emerald-500 align-middle" />
+                              {" seats live"}
+                            </span>
+                          )}
+                          {liveSeatsStatus === "stored" && (
+                            <span className="text-slate-300"> · seats from last sync</span>
+                          )}
                         </span>
                         <div className="mt-1.5 max-h-36 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-100">
                           {courseDetail.sections!.map((sec) => {
@@ -2431,9 +2532,15 @@ export default function Home() {
                             // counts. seatCount on all three because a section
                             // with no waitlist comes back as the string "N/A",
                             // which a bare null check lets through.
-                            const secOpen = seatCount(sec.open_seats);
-                            const secMax = seatCount(sec.max_seats);
-                            const secWl = seatCount(sec.waitlisted) ?? 0;
+                            // Live where SIS answered, stored everywhere else,
+                            // decided per section: a course can gain a section
+                            // between syncs, and one the overlay does not
+                            // cover should keep its stored numbers rather than
+                            // fall back to nothing.
+                            const live = liveSeats?.[sec.section_name];
+                            const secOpen = seatCount(live ? live.open_seats : sec.open_seats);
+                            const secMax = seatCount(live ? live.max_seats : sec.max_seats);
+                            const secWl = seatCount(live ? live.waitlisted : sec.waitlisted) ?? 0;
                             const hasSeats = secOpen !== null && secMax !== null;
                             return (
                               <button
@@ -2473,7 +2580,14 @@ export default function Home() {
                                 </span>
                                 {hasSeats && (
                                   <span
-                                    className="shrink-0 text-right leading-[1.35]"
+                                    // Dimmed while the live numbers are on
+                                    // their way: the stored ones stay readable
+                                    // and in place, and the column settling to
+                                    // full strength is the only movement when
+                                    // they arrive.
+                                    className={`shrink-0 text-right leading-[1.35] transition-opacity duration-300 ${
+                                      liveSeatsStatus === "loading" ? "opacity-60" : "opacity-100"
+                                    }`}
                                     title={
                                       `${secOpen} of ${secMax} seats open` +
                                       (secWl > 0 ? `, ${secWl} on the waitlist` : "")
