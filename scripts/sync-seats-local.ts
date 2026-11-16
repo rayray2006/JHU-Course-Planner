@@ -6,11 +6,16 @@
  * backfills descriptions/prereqs/evals onto brand-new sections (which SIS does
  * not carry) from the most recent other term of the same offering.
  *
+ * Sections SIS has stopped listing are deleted, along with any saved-schedule
+ * entries pointing at them; pass --keep-vanished to leave them in place.
+ *
  *   npm run sync:seats            # current term from available_terms
  *   npm run sync:seats -- "Spring 2027"
+ *   npm run sync:seats -- --keep-vanished
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchSchoolTerm, toCourseRow, SISApiError, SIS_API_BASE, type SISCourse } from "../src/lib/sis-api";
+import { pruneGhostSections, sectionKey } from "../src/lib/seat-sync";
 
 const SCHOOLS = [
   "Krieger School of Arts and Sciences",
@@ -54,7 +59,7 @@ async function selectAll<T>(build: () => any, pageSize = 1000): Promise<T[]> {
 }
 
 async function resolveTerm(): Promise<string> {
-  const argTerm = process.argv[2];
+  const argTerm = process.argv.slice(2).find((a) => !a.startsWith("--"));
   if (argTerm) return argTerm;
   const { data, error } = await supabase
     .from("available_terms")
@@ -76,16 +81,23 @@ type ExistingRow = {
 };
 
 async function main() {
+  const keepVanished = process.argv.includes("--keep-vanished");
   const term = await resolveTerm();
   console.log(`Term: ${term}`);
   console.log(`SIS API: ${SIS_API_BASE}\n`);
 
   const fresh: SISCourse[] = [];
+  // Per school, so the prune at the end can skip a school that did not answer
+  // rather than reading its silence as "every section was cancelled".
+  const liveBySchool = new Map<string, Set<string>>();
   for (const school of SCHOOLS) {
     console.log(`Fetching ${school}...`);
     const rows = await fetchSchool(school, term);
     console.log(`  ${rows.length} sections`);
     fresh.push(...rows);
+    if (rows.length > 0) {
+      liveBySchool.set(school, new Set(rows.map((r) => sectionKey(r.OfferingName, r.SectionName))));
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
   if (fresh.length === 0) {
@@ -130,7 +142,7 @@ async function main() {
   console.log(`  new sections:      ${newSections.length}`);
   console.log(`  seat/waitlist:     ${seatChanges.length} changed`);
   console.log(`  status:            ${statusChanges.length} changed`);
-  console.log(`  no longer in SIS:  ${vanished.length} (left untouched)`);
+  console.log(`  no longer in SIS:  ${vanished.length}${keepVanished ? " (--keep-vanished: left in place)" : " (will be removed)"}`);
 
   console.log("\nUpserting...");
   let updated = 0;
@@ -147,6 +159,29 @@ async function main() {
 
   if (newSections.length > 0) {
     await backfillNewSections(term, newSections);
+  }
+
+  // Before the row count below, so available_terms.course_count reflects what
+  // is actually left.
+  if (!keepVanished && vanished.length > 0) {
+    console.log("\nRemoving sections SIS no longer lists...");
+    for (const [school, liveKeys] of liveBySchool) {
+      const r = await pruneGhostSections(supabase, term, school, liveKeys);
+      if (r.skipped) {
+        console.log(`  ${school}: ${r.skipped}`);
+        continue;
+      }
+      if (r.ghosts === 0) {
+        console.log(`  ${school}: nothing to remove`);
+        continue;
+      }
+      console.log(
+        `  ${school}: removed ${r.deletedCourses} of ${r.stored}` +
+          (r.deletedScheduleRows > 0 ? `, plus ${r.deletedScheduleRows} saved-schedule entr${r.deletedScheduleRows === 1 ? "y" : "ies"}` : "")
+      );
+      for (const e of r.examples.slice(0, 5)) console.log(`      ${e}`);
+      if (r.ghosts > 5) console.log(`      ...and ${r.ghosts - 5} more`);
+    }
   }
 
   const { count } = await supabase

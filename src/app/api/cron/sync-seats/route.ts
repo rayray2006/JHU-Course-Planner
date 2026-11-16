@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { fetchSchoolTerm, toCourseRow, SISApiError, type SISCourse } from "@/lib/sis-api";
+import { pruneGhostSections, sectionKey, type PruneResult } from "@/lib/seat-sync";
 
 export const maxDuration = 300;
 
@@ -42,9 +43,15 @@ export async function GET(request: Request) {
   const started = Date.now();
   const allRows: SISCourse[] = [];
   const fetchErrors: string[] = [];
+  // Kept per school, because the prune below may only act on a school whose
+  // fetch succeeded — one school being down must not make its stored sections
+  // look cancelled.
+  const liveBySchool = new Map<string, Set<string>>();
   for (const school of SCHOOLS) {
     try {
-      allRows.push(...(await fetchSchoolTerm(school, term, apiKey)));
+      const rows = await fetchSchoolTerm(school, term, apiKey);
+      allRows.push(...rows);
+      liveBySchool.set(school, new Set(rows.map((r) => sectionKey(r.OfferingName, r.SectionName))));
     } catch (err) {
       fetchErrors.push(`${school}: ${err instanceof SISApiError ? err.message : String(err)}`);
     }
@@ -68,6 +75,14 @@ export async function GET(request: Request) {
     } else updated += chunk.length;
   }
 
+  // Upserting alone left cancelled sections in the table for good, still
+  // showing the seats they had when they disappeared. Only schools that
+  // actually answered are considered.
+  const pruned: PruneResult[] = [];
+  for (const [school, liveKeys] of liveBySchool) {
+    pruned.push(await pruneGhostSections(supabase, term, school, liveKeys));
+  }
+
   return NextResponse.json({
     term,
     fetched: allRows.length,
@@ -75,6 +90,9 @@ export async function GET(request: Request) {
     failed,
     firstError,
     fetchErrors,
+    removed: pruned.reduce((n, p) => n + p.deletedCourses, 0),
+    removedFromSchedules: pruned.reduce((n, p) => n + p.deletedScheduleRows, 0),
+    pruneSkipped: pruned.filter((p) => p.skipped).map((p) => `${p.school}: ${p.skipped}`),
     durationMs: Date.now() - started,
   });
 }
